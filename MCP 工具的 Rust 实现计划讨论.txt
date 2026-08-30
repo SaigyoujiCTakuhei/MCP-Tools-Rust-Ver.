@@ -1,0 +1,922 @@
+讨论一下，我想用 RUST 写一个附带网页的 MCP 服务器，这可行吗？
+网页里需要列出加载了哪些 MCP 工具，并且可以使用工具旁边的按钮来拔插工具，右上角还需要一个刷新按钮，用来加载新的工具。 
+
+
+
+思考过程
+用 Rust 写带网页的 MCP 服务器 — 可行性讨论
+结论先行：完全可行，而且是个挺合适用 Rust 做的项目。 但有几个设计点需要先想清楚。下面分层讨论。
+
+一、整体架构
+MCP 客户端（Claude Desktop、Cursor 等）和你的管理网页是两类不同的消费者，所以最干净的架构是单进程内跑两个服务：
+
+text
+
+┌──────────────────────────────────────────────┐
+│              Rust 单二进制进程                │
+│                                              │
+│   ┌──────────────┐      ┌────────────────┐   │
+│   │  MCP Server  │      │  HTTP Server   │   │
+│   │ (stdio/SSE)  │      │  (axum, 管理面) │   │
+│   │              │      │                │   │
+│   │ tools/list   │      │ GET  /tools    │   │
+│   │ tools/call   │      │ POST /toggle   │   │
+│   │ list_changed │      │ POST /refresh  │   │
+│   └──────┬───────┘      └───────┬────────┘   │
+│          └─────────┬────────────┘            │
+│                    ▼                         │
+│         ┌──────────────────────┐             │
+│         │  ToolRegistry        │             │
+│         │  Arc<RwLock<…>>      │             │
+│         │  - 工具表            │             │
+│         │  - enabled 标志      │             │
+│         │  - 加载源            │             │
+│         └──────────────────────┘             │
+└──────────────────────────────────────────────┘
+        ▲ stdin/stdout (JSON-RPC)        ▲ HTTP
+        │                                │
+   ┌────┴─────┐                    ┌─────┴────┐
+   │  Claude  │                    │  浏览器   │
+   │ Desktop  │                    │  管理页   │
+   └──────────┘                    └──────────┘
+MCP 走 stdio 时，Claude Desktop 把它当子进程启动；HTTP 管理端口由你自己监听 127.0.0.1:port，浏览器单独访问。两者共享同一份 ToolRegistry。
+
+二、技术选型
+部分	推荐	备注
+MCP SDK	rmcp	Anthropic 官方 Rust SDK，支持 stdio 和 Streamable HTTP
+HTTP 框架	axum	与 tokio 生态契合，共享 runtime
+静态资源	rust-embed 或 include_dir	把前端打进二进制，分发零依赖
+前端	Alpine.js / htmx / 纯 vanilla	这种小页面没必要上 React/Vite
+状态共享	Arc<RwLock<ToolRegistry>>	读多写少，RwLock 合适
+动态加载（可选）	libloading / rhai / mlua	看你想不想运行时加新工具
+
+三、关键设计点
+1. "拔插"工具的语义
+需要先明确，"拔插"在你这里是哪一种：
+
+A. 启用/禁用：工具仍在注册表里，只是 tools/list 不返回它。客户端拿不到就调用不了。✅ 推荐
+B. 真正卸载：从注册表移除，可能还要释放资源（关闭文件、连接）。
+C. 持久化：状态写入 config.toml，重启后保持。
+实现层面很简单：
+
+rust
+
+struct ToolEntry {
+    spec: Tool,                 // MCP 工具定义
+    handler: Arc<dyn ToolHandler>,
+    enabled: AtomicBool,
+    source: ToolSource,         // Builtin / Plugin(path) / Script(path)
+}
+
+impl ToolRegistry {
+    fn list_for_mcp(&self) -> Vec<Tool> {
+        self.tools.values()
+            .filter(|t| t.enabled.load(Relaxed))
+            .map(|t| t.spec.clone())
+            .collect()
+    }
+}
+2. 拔插后必须通知客户端
+MCP 协议有 notifications/tools/list_changed，toggle 后必须主动推给客户端，否则 Claude Desktop 不会重新拉列表，"拔了"它还能调用，"插了"它看不到。
+
+rust
+
+// toggle 后
+server.notify(Notification::ToolsListChanged).await?;
+这是整个交互里最容易忽略的点。
+
+3. "刷新按钮加载新工具" 的歧义
+这里要想清楚刷新到底刷新什么：
+
+方案 A：刷新只是让网页重新拉 /api/tools，不改变后端状态。→ 极简，但意义不大。
+方案 B：后端重新扫描某个目录（如 ./plugins/），加载新的 .so/.dll 或脚本。→ 真正"加载新工具"，但要做动态加载。
+方案 C：从远端配置源（git repo、HTTP endpoint）拉取工具清单。→ 最灵活，复杂度也最高。
+如果是 B，需要约定插件 ABI。最简单的路子是用脚本引擎（rhai/js），避免 ABI 兼容地狱：
+
+rust
+
+// 扫描 ./tools/*.rhai
+for path in scan_dir("./tools")? {
+    let ast = engine.compile_file(path)?;
+    registry.register(Tool::from_ast(&ast));
+}
+4. stdio 模式的输出纪律
+这是 Rust MCP 服务器最常见的坑：stdout 只能输出 JSON-RPC。任何 println!、tracing 默认输出都会污染协议流，让客户端直接报错。
+
+rust
+
+// 正确做法：日志只走 stderr 或文件
+tracing_subscriber::fmt()
+    .with_writer(std::io::stderr)
+    .init();
+如果你的 MCP 用 HTTP 传输（Streamable HTTP），就没这个限制，但要处理 SSE 长连接。
+
+四、网页设计建议
+页面非常简单，不用上重型框架：
+
+API 设计：
+
+text
+
+GET    /api/tools              → 列出所有工具（含 enabled 状态）
+POST   /api/tools/:name/toggle → 切换启用状态，返回新状态
+POST   /api/refresh            → 重新扫描加载源，返回变更 diff
+GET    /api/events (SSE)       → 可选，工具变更实时推给网页
+五、潜在坑清单
+stdout 污染：如上，日志必须走 stderr。
+多客户端并发：如果同时多个 MCP 客户端连同一个 stdio 实例不可能（stdio 是 1对1），但 HTTP 模式下可能多个客户端，toggle 状态对所有人都生效，要考虑是否合理。
+tools/call 时工具被禁用：竞态条件——客户端拿到了 list，调用时刚好被 toggle 掉了。要返回 MethodNotFound 或 InvalidParams。
+动态库卸载：如果用 libloading 真卸载工具，要确保没有正在执行的 handler 持有指针，否则 segfault。建议用"标记禁用 + 引用计数归零后再 Drop"。
+配置持久化：toggle 状态要不要存？建议存 ~/.config/your-mcp/state.toml，否则每次重启都重置，体验差。
+CORS：如果网页和 HTTP 管理端口同源就没事；如果想从别的地方访问，要加 tower-http::cors。
+端口冲突：管理端口固定的话可能被占用，建议从配置文件读，或用 0 让 OS 分配后写到状态文件。
+六、需要你拍板的几个问题
+在动手前，建议先想清楚：
+
+MCP 传输模式：stdio（给 Claude Desktop 用）还是 Streamable HTTP（更通用）？还是两种都支持？
+"加载新工具"的来源：内置的固定集合？扫描目录？远程拉取？
+工具实现形态：编译进二进制的 Rust 函数？动态库？脚本？还是混合？
+状态持久化：toggle 后是否要保存到磁盘？
+是否需要网页实时更新：A 在浏览器 A toggle 后，浏览器 B 是否要立即看到？（要的话加 SSE/WebSocket）
+七、最小可行原型工作量预估
+如果只做最简版（内置工具 + toggle + 持久化 + 简单网页）：
+
+MCP 服务骨架（rmcp）：0.5 天
+ToolRegistry + axum API：0.5 天
+网页（Alpine + 几行 CSS）：0.5 天
+配置持久化 + 联调：0.5 天
+总计约 2 天就能跑起来一个能用的 demo。如果加上动态加载/脚本引擎，再加 2-3 天。
+
+要不要我帮你出一个最小骨架的目录结构和关键代码？或者你先回答上面的几个拍板问题，我们再具体往下走。
+
+---
+
+1、"拔插"工具的语义：
+    由于需要调试工具，因此需要在列表中卸载它（卸载后不影响其他工具的使用），并在修改后重新加载。
+2、"刷新按钮加载新工具" 的歧义：
+    用于上文说的重新加载，重新加载会重新加载所有工具。
+3、MCP 传输模式：
+    MCP 使用 Streamable HTTP。
+4、"加载新工具"的来源：
+    在本地的一个文件夹中，文件夹包含多个子文件夹，每个子文件夹包含不同的工具。
+5、网页实时更新：
+    卸载工具后需要从网页的列表里移除该工具（实时更新），使用“刷新”按钮后才会重新出现（手动更新）。
+6、网页布局：
+   左右布局，左边是工具列表。单击工具后右边会出现它的控制台，用于显示日志或输出。
+7、MCP 服务器启动后会自动打开一个网页（调用系统默认浏览器，基于 Windows），端口是 58080（MCP 服务器端口是 58081）。  
+显示完整信息
+
+思考过程
+你的需求非常清晰，这完全是一个典型且实用的 开发者工具（DevTool） 形态。基于你补充的 7 点，整个架构和实现路径已经非常明确了。
+
+下面我为你梳理这套方案的核心架构、工具定义规范以及关键实现细节。
+
+一、 整体架构设计
+采用单进程双端口架构，Rust 进程启动时同时拉起两个 HTTP 服务，并自动打开浏览器。
+
+text
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Rust 单二进制进程                        │
+│                                                             │
+│  ┌─────────────────────┐      ┌──────────────────────────┐ │
+│  │  Web Server (Axum)  │      │  MCP Server (Axum+rmcp)  │ │
+│  │  Port: 58080        │      │  Port: 58081             │ │
+│  │                     │      │                          │ │
+│  │ - 静态页面托管      │      │ - POST /mcp (SSE/JSON)   │ │
+│  │ - GET  /api/tools   │      │ - tools/list             │ │
+│  │ - POST /api/unload  │      │ - tools/call             │ │
+│  │ - POST /api/refresh │      │ - list_changed 通知      │ │
+│  │ - WS   /api/logs    │      │                          │ │
+│  └──────────┬──────────┘      └────────────┬─────────────┘ │
+│             └────────────┬─────────────────┘               │
+│                          ▼                                 │
+│            ┌──────────────────────────────┐                │
+│            │      ToolRegistry Core       │                │
+│            │  Arc<RwLock<HashMap<...>>>   │                │
+│            └──────────────┬───────────────┘                │
+│                           ▼                                │
+│            ┌──────────────────────────────┐                │
+│            │       Log Broadcaster        │                │
+│            │  (tokio::broadcast channel)  │                │
+│            └──────────────────────────────┘                │
+└─────────────────────────────────────────────────────────────┘
+二、 本地工具的定义规范
+既然是从本地文件夹读取（例如 ./tools/ 文件夹下的各个子文件夹），你需要约定一种工具格式。最灵活且无 ABI 坑的方式是：子文件夹内包含一个 manifest.json 和一个可执行脚本/程序。
+
+目录结构示例：
+
+text
+
+./tools/
+  ├── weather/
+  │   ├── manifest.json   // 工具元数据
+  │   └── run.py          // 具体执行逻辑
+  ├── calculator/
+  │   ├── manifest.json
+  │   └── run.exe
+manifest.json 格式约定：
+
+json
+
+{
+  "name": "get_weather",
+  "description": "获取指定城市的天气",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "city": { "type": "string" }
+    },
+    "required": ["city"]
+  },
+  "executor": "python run.py"  // 告诉 Rust 怎么执行它
+}
+当 MCP 客户端调用 tools/call 时，Rust 后端：
+
+找到对应工具的 executor。
+将 MCP 传来的参数 JSON 通过命令行参数或 stdin 传给子进程。
+捕获子进程的 stdout/stderr。
+将 stdout 作为 MCP 的返回结果，同时把 stderr 及执行日志推送到网页的 WebSocket 控制台。
+三、 核心交互流程实现
+1. 自动打开浏览器 (启动行为)
+使用 Rust 标准库在 Windows 上调用 cmd /C start 即可。
+
+rust
+
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .ok();
+}
+在 main.rs 中，启动 Web 服务和 MCP 服务后，延迟 1 秒调用 open_browser("http://127.0.0.1:58080")。
+
+2. 拔插与刷新逻辑 (状态机)
+卸载：网页点击卸载 -> 调用 POST /api/tools/{name}/unload -> 后端从 ToolRegistry 移除该工具 -> 触发 MCP 的 notifications/tools/list_changed -> 通过 WebSocket 通知前端移除 UI。
+刷新：网页点击刷新 -> 调用 POST /api/refresh -> 后端重新扫描 ./tools/ 目录 -> 解析所有 manifest.json -> 更新 ToolRegistry -> 触发 MCP 通知 -> 返回最新列表给前端重新渲染。
+3. MCP 通知机制
+当工具被卸载或刷新时，MCP 客户端（如 Claude Desktop）需要知道工具列表变了。在 rmcp 中，你需要向客户端发送通知：
+
+rust
+
+// 伪代码：通知所有连接的 MCP 客户端
+server.notify(Notification::ToolsListChanged).await?;
+4. 左右布局与实时日志 (WebSocket)
+这是你最核心的开发体验需求。左边列表，右边控制台。
+
+后端 WebSocket 实现：
+使用 axum::extract::ws。每个工具在执行时，会产生日志，通过 tokio::sync::broadcast 发送。
+
+rust
+
+// 全局日志通道
+let (log_tx, _) = tokio::sync::broadcast::channel::<String>(100);
+
+// 当执行工具时
+let mut child = Command::new("python").arg("run.py").stderr(Stdio::piped())...spawn()?;
+let stderr = child.stderr.take().unwrap();
+// 循环读取 stderr 并发送到广播通道
+tokio::spawn(async move {
+    let reader = BufReader::new(stderr);
+    let mut lines = reader.lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let log_msg = format!("[{}] {}", tool_name, line);
+        let _ = log_tx.send(log_msg); // 广播给所有 WebSocket 连接
+    }
+});
+前端 UI 结构 (Vanilla JS + TailwindCSS / 简单 CSS)：
+<div class="flex h-screen">
+  <!-- 左侧工具列表 -->
+  <div class="w-1/3 border-r p-4 overflow-y-auto">
+    <div class="flex justify-between mb-4">
+      <h1 class="text-xl font-bold">MCP 工具</h1>
+      <button id="refresh-btn" class="bg-blue-500 text-white px-3 py-1 rounded">🔄 刷新</button>
+    </div>
+    <ul id="tool-list" class="space-y-2">
+      <!-- 动态渲染工具项 -->
+      <li class="flex justify-between p-2 bg-gray-100 rounded cursor-pointer">
+        <span>get_weather</span>
+        <button class="text-red-500">⏏ 卸载</button>
+      </li>
+    </ul>
+  </div>
+
+  <!-- 右侧控制台 -->
+  <div class="w-2/3 bg-black text-green-400 p-4 font-mono overflow-y-auto">
+    <div id="console-header" class="text-white mb-2">请选择一个工具查看日志</div>
+    <div id="console-output"></div>
+  </div>
+</div>
+
+<script>
+  // 建立 WebSocket 连接，实时接收日志
+  const ws = new WebSocket("ws://127.0.0.1:58080/api/logs");
+  let activeTool = null;
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.tool === activeTool) {
+      document.getElementById("console-output").innerHTML += `<div>${data.log}</div>`;
+    }
+  };
+</script>
+
+四、 关键注意事项与避坑指南
+MCP 协议端口 (58081) 的限制：
+Claude Desktop 目前对 HTTP 模式的 MCP 支持正逐步完善。确保你的 /mcp 端点同时支持 POST（处理请求）和 GET（SSE 事件流），并正确处理 MCP-Session-Id。
+子进程生命周期管理：
+如果用户卸载了工具，但该工具的子进程还在运行，可能会导致卡死。在卸载时，不仅要移除注册表记录，最好还能中断或等待其关联的子进程结束。
+日志通道性能：
+使用 tokio::broadcast 时，如果前端没消费，消息会被丢弃，这对于调试工具是可接受的（避免内存撑爆）。如果需要保留历史日志，可以在内存里为每个工具保留最近 100 行日志，切换工具时先拉取历史再接实时。
+stdin 传参：
+如果工具参数很大，建议把 MCP 传来的 JSON 参数通过子进程的 stdin 传入，而不是拼接到命令行参数中，这可以避免 Windows 命令行长度限制。
+五、 下一步建议
+这个方案完全可行，且能做出一个非常漂亮的开发者工具。你可以按以下步骤开始：
+
+cargo new mcp_dev_server
+引入依赖：axum, tokio, serde, serde_json, rmcp, tower-http。
+先跑通 Axum 双端口启动 + 自动打开浏览器。
+写一个简单的 ToolRegistry，手动塞入两个假工具，跑通前端网页列表。
+接入 rmcp，跑通 Claude Desktop 的 tools/list。
+实现本地目录扫描和外部子进程调用逻辑。
+最后完善 WebSocket 日志流。
+需要我为你提供一份 main.rs 的双端口启动 + ToolRegistry 基础骨架代码吗？
+
+---
+
+以下是部分架构参考，原架构使用 Python 编写。不知道改用 Rust 后该怎么处理，是能继续用“.py”，还是需要使用“.rs”。
+
+MCP Server\v11 (Playground)\
+├─── .git/                              # Git 版本控制目录
+├─── .gitignore                         # Git 忽略规则，定义不纳入版本控制的文件和目录
+├─── .python-version                    # Python 版本锁定文件，指定项目使用 Python 3.10
+├─── Ent.py                             # MCP 服务器主入口，负责初始化、工具扫描与注册、启动服务
+├─── Lib/                               # 工具模块目录，包含所有 MCP 工具的实现
+│   ├─── __init__.py                    # Lib 主模块初始化文件，说明目录下所有文件的功能和暴露的 MCP 工具
+│   ├─── __pycache__/                   # Python 字节码缓存
+│   ├─── ai_bridge/                     # AI 多模型桥接模块
+│   │   ├─── __init__.py                # AI 桥接模块初始化文件
+│   │   ├─── __pycache__/               # Python 字节码缓存
+│   │   ├─── configs/                   # AI 配置文件目录
+│   │   │   ├─── A-agnes-2.0-flash.txt  # Agnes 2.0 Flash 模型配置
+│   │   │   ├─── MS-DeepSeek-V4-Pro.txt # DeepSeek V4 Pro 模型配置（MS 系列）
+│   │   │   ├─── MS-GLM-5.1.txt         # GLM-5.1 模型配置（MS 系列）
+│   │   │   ├─── MS-Z-Image.txt         # Z-Image 图像生成模型配置（MS 系列）
+│   │   │   ├─── N-deepseek-v4-pro.txt  # DeepSeek V4 Pro 模型配置（N 系列）
+│   │   │   ├─── N-glm-5.1.txt          # GLM-5.1 模型配置（N 系列）
+│   │   │   ├─── N-kimi-k2.6.txt        # Kimi K2.6 模型配置（N 系列）
+│   │   │   ├─── N-nemotron-3-super-120b-a12b.txt  # Nemotron-3-Super-120B 模型配置（N 系列）
+│   │   │   └─── model_metadata.json    # AI 模型元数据索引文件，存储所有模型的综合信息
+│   │   ├─── scripts/                   # AI 桥接脚本目录
+│   │   │   ├─── config.py              # AI 桥接配置管理模块
+│   │   │   ├─── list_models.py         # 列出已加载 AI 模型的工具脚本（2 工具）
+│   │   │   ├─── metadata.py            # AI 模型元数据处理模块
+│   │   │   ├─── network.py             # AI 桥接网络通信模块
+│   │   │   ├─── parser.py              # AI 响应解析器模块
+│   │   │   ├─── query_ais.py           # AI 查询统一入口脚本（1 工具）
+│   │   │   ├─── query_chat_ais.py      # AI 聊天模型内部查询（无 @tool）
+│   │   │   ├─── query_image_ais.py     # AI 图像生成内部查询（无 @tool）
+│   │   │   └─── route.py               # AI 请求路由分发模块
+│   │   └─── skills/                    # AI 桥接技能文档目录
+│   │       ├─── SKILL.md               # AI 桥接技能指引文档
+│   │       └─── reference.md           # AI 桥接参考文档
+│   ├─── base/                          # 基础架构模块
+│   │   ├─── __init__.py                # 基础架构模块初始化文件
+│   │   ├─── __pycache__/               # Python 字节码缓存
+│   │   ├─── scripts/                   # 基础架构脚本目录
+│   │   │   ├─── context.py             # 上下文管理模块
+│   │   │   ├─── PromptRegistry.py      # 提示词注册中心，管理所有 MCP 提示词
+│   │   │   ├─── ResourceRegistry.py    # 资源注册中心，管理所有 MCP 资源
+│   │   │   └─── ToolRegistry.py        # 工具注册中心，管理所有 MCP 工具
+│   │   └─── skills/                    # 基础架构技能文档目录
+│   │       ├─── SKILL.md               # 基础架构技能指引文档
+│   │       └─── reference.md           # 基础架构参考文档
+│   ├─── browser_automation/            # 浏览器自动化模块（Playwright 异步控制）
+│   │   ├─── __init__.py                # 浏览器自动化模块初始化文件
+│   │   ├─── __pycache__/               # Python 字节码缓存
+│   │   ├─── cookies/                   # Cookie/Session 持久化存储目录
+│   │   │   ├─── deepseek_session_state.json  # DeepSeek 会话状态持久化文件
+│   │   │   └─── path_config.json       # 浏览器路径配置信息文件
+│   │   ├─── scripts/                   # 浏览器自动化脚本目录
+│   │   │   ├─── browser_automation_mcp.py  # 浏览器自动化 MCP 工具主入口（无 @tool）
+│   │   │   ├─── browser_manager.py     # 浏览器管理器核心模块（无 @tool）
+│   │   │   ├─── tools_cookies.py       # Cookie 操作工具脚本（4 工具）
+│   │   │   ├─── tools_debug.py         # 浏览器调试工具脚本（3 工具）
+│   │   │   ├─── tools_environment.py   # 浏览器环境配置工具脚本（3 工具）
+│   │   │   ├─── tools_interaction.py   # 浏览器交互操作工具脚本（3 工具）
+│   │   │   ├─── tools_navigate.py      # 浏览器导航工具脚本（4 工具）
+│   │   │   └─── tools_network.py       # 浏览器网络请求工具脚本（3 工具）
+│   │   └─── skills/                    # 浏览器自动化技能文档目录
+│   │       ├─── SKILL.md               # 浏览器自动化技能指引文档
+│   │       └─── reference.md           # 浏览器自动化参考文档  
+显示完整信息
+
+思考过程
+针对你提供的 Python 架构，核心问题是：改用 Rust 后，工具该怎么写？还能不能用 .py？
+
+结论先行：强烈建议保留 .py，Rust 只做“宿主”和“管理面板”，不要把工具全改成 .rs。
+
+下面详细说明为什么这么做，以及如何在 Rust 架构下管理原来的 Python 代码。
+
+一、 为什么不全改成 .rs？
+生态壁垒：你的原架构里有 browser_automation（Playwright）和 ai_bridge（多模型调用）。Playwright 在 Rust 生态中虽然有绑定，但远不如 Python 官方版成熟；AI SDK 也是 Python 占绝对主导。
+失去动态性：Rust 是编译型语言。如果工具用 .rs 写，每次修改工具都要重新编译整个项目，这违背了你“需要调试工具，修改后重新加载”的初衷。
+Rust 的定位：在这个项目中，Rust 最适合做的是高性能、高并发的底层调度器（HTTP 服务器、MCP 协议解析、WebSocket 日志流、子进程生命周期管理），而不是具体的业务脚本。
+二、 Rust + Python 的混合架构设计
+架构调整为：Rust 为主进程，Python 退化为被调用的子进程。
+
+你原来的目录结构基本不用大动，只需在根目录增加 Rust 项目，并给每个 Python 脚本加上一份“工具描述清单”，让 Rust 能看懂。
+
+1. 改造后的目录结构
+text
+
+MCP_Server_Rust/          <-- 新建的 Rust 项目
+├── Cargo.toml
+├── src/
+│   ├── main.rs           <-- Rust 主入口 (启动 58080/58081)
+│   ├── registry.rs       <-- 工具注册表与状态机
+│   ├── executor.rs       <-- 调用 Python 脚本的执行器
+│   └── web/              <-- 内嵌的前端静态文件
+│
+└── Lib/                  <-- 原有的 Python 工具目录 (保持原样)
+    ├── ai_bridge/
+    │   ├── manifest.json <-- 【新增】告诉 Rust 这个脚本提供哪些工具
+    │   ├── configs/
+    │   └── scripts/
+    │       └── query_ais.py
+    ├── base/
+    │   └── scripts/
+    │       └── PromptRegistry.py
+    └── browser_automation/
+        ├── manifest.json <-- 【新增】
+        ├── cookies/
+        └── scripts/
+            └── tools_navigate.py
+2. 核心契约：manifest.json (或者利用 Python 的 --help)
+原来 Python 用 @tool 装饰器在运行时动态注册工具。现在 Rust 是外层，Rust 不懂 Python 装饰器。有两种方式解决：
+
+方式 A：静态清单（推荐，最稳定）
+在需要暴露工具的子模块下放一个 manifest.json：
+
+json
+
+{
+  "module": "browser_automation",
+  "tools": [
+    {
+      "name": "navigate_to_url",
+      "description": "导航浏览器到指定 URL",
+      "script": "scripts/tools_navigate.py",
+      "input_schema": {
+        "type": "object",
+        "properties": { "url": { "type": "string" } },
+        "required": ["url"]
+      }
+    }
+  ]
+}
+Rust 刷新时只需扫描所有 manifest.json，就能拿到完整的 MCP tools/list 结构。
+
+方式 B：脚本自省（最贴近原架构）
+约定每个 Python 脚本支持 --list-tools 参数，输出 JSON：
+python scripts/tools_navigate.py --list-tools
+Rust 刷新时调用所有脚本的该命令，收集结果。这样连 manifest.json 都不用写，依然可以用你原来的 @tool 装饰器机制（只需加个入口输出 JSON 即可）。
+
+三、 Rust 如何执行 Python 工具？
+当 MCP 客户端（如 Claude）调用 tools/call 时，Rust 的处理流程：
+
+接收请求：Rust 收到 {"name": "navigate_to_url", "arguments": {"url": "..."}}
+查找注册表：在内存中找到该工具对应的执行命令 python scripts/tools_navigate.py。
+启动子进程：Rust 使用 tokio::process::Command 启动 Python 进程。
+传参：将 arguments 通过 stdin（或命令行参数）传给 Python。
+捕获输出：
+读取子进程的 stdout，作为 MCP 的结果返回。
+读取子进程的 stderr，通过 WebSocket 实时推送到你的网页右侧控制台。
+Python 脚本的改造（以 tools_navigate.py 为例）：
+原来可能是一个被 import 的模块，现在需要加一个 if __name__ == "__main__": 的入口，读取 stdin 的 JSON 并执行：
+
+python
+
+import sys
+import json
+from .browser_manager import navigate # 你原有的逻辑
+
+if __name__ == "__main__":
+    # 1. 从 stdin 读取 Rust 传来的参数
+    input_data = sys.stdin.read()
+    args = json.loads(input_data)
+    
+    try:
+        # 2. 执行原有逻辑
+        result = navigate(args["url"])
+        
+        # 3. 结果输出到 stdout (Rust 会拿走)
+        print(json.dumps({"status": "success", "data": result}))
+    except Exception as e:
+        # 4. 错误日志输出到 stderr (Rust 会推送到网页控制台)
+        print(f"[ERROR] 导航失败: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+四、 网页端“拔插”与“刷新”的实现
+基于上述架构，完美契合你的需求：
+
+卸载（拔）：
+网页点击卸载 -> Rust 从 ToolRegistry 内存中移除该工具 -> 通知 MCP 客户端 list_changed。
+此时 Python 脚本文件还在硬盘上，只是 Rust 不再把它暴露给 Claude。
+修改工具代码：
+你在 VSCode 里修改 tools_navigate.py 的逻辑。因为 Rust 主进程没挂，所以不影响其他工具。
+刷新（插）：
+点击网页右上角刷新 -> Rust 重新扫描 Lib/ 下的 manifest.json（或调用 --list-tools）。
+把最新的工具列表加载进内存 -> 通知网页更新左侧列表 -> 通知 MCP 客户端。
+五、 总结建议
+不要把 Python 翻译成 Rust。用 Rust 做壳和调度，Python 做肉和逻辑。
+
+这样你的架构既获得了 Rust 的高性能、无 GIL 锁的并发、WebSocket 实时流推送，又保留了 Python 丰富的生态（Playwright、AI 调用）和改完即用的调试便利性。
+
+---
+
+我原来的项目有一个 list_tools.py，可用复用吗？还是要写个新的？
+
+# /// script
+# dependencies = []
+# requires-python = ">=3.10"
+# ///
+"""
+list_tools - 工具列表发现工具
+
+功能说明：
+- 从 ToolRegistry 获取所有已注册的工具
+- 返回工具列表（名称、描述等元数据）
+- 作为 use_tools 的前置发现工具，让 LLM 快速了解有哪些工具可用
+
+暴露的 MCP 工具：
+- list_tools: 列出所有可用工具
+
+【猫娘修改】：新增工具列表发现工具，对齐 list_skills 模式。【修改时间】：2026-07-01T00:14:48+08:00
+【猫娘修改】：统一使用 ToolsLogManager 输出日志。【修改时间】：2026-07-04T00:33:30+08:00
+"""
+
+# 【猫娘修改】：导入日志格式化模块（从 logs_formatter）。【修改时间】：2026-07-04T00:33:30+08:00
+from Library.bases.scripts.logs_formatter import ToolsLogManager
+
+from Library.bases.scripts.registry_tools import ToolRegistry, tool
+
+
+@tool(name="list_tools")
+async def list_tools() -> list:
+    """
+    列出所有可用工具
+    
+    返回:
+        list: 工具列表，每个元素包含：
+            - name (str): 工具名称
+            - description (str): 工具描述
+    """
+    # 【猫娘修改】：记录扫描请求日志。【修改时间】：2026-07-01T00:14:48+08:00
+    # 【猫娘修改】：统一使用 ToolsLogManager 输出日志。【修改时间】：2026-07-04T00:33:30+08:00
+    ToolsLogManager.log_info("开始扫描工具列表")
+    
+    # 【猫娘修改】：从 ToolRegistry 获取所有已注册的工具。【修改时间】：2026-07-01T00:14:48+08:00
+    tools = ToolRegistry.get_all()
+    tools_list = []
+    
+    for name, func in tools.items():
+        # 【猫娘修改】：提取工具描述信息（从函数 docstring 或装饰器参数获取）。【修改时间】：2026-07-01T00:14:48+08:00
+        description = getattr(func, "__doc__", "") or ""
+        if not description:
+            description = ""
+        
+        tools_list.append({
+            "name": name,
+            "description": description.strip()
+        })
+    
+    # 【猫娘修改】：记录扫描完成日志。【修改时间】：2026-07-01T00:14:48+08:00
+    # 【猫娘修改】：统一使用 ToolsLogManager 输出日志。【修改时间】：2026-07-04T00:33:30+08:00
+    ToolsLogManager.log_info(f"工具列表扫描完成，共 {len(tools_list)} 个工具")
+    
+    return tools_list 
+
+思考过程
+结论：不能直接复用，需要写个新的（或者做大幅改造）。
+
+原因在于架构的“倒置”。
+
+在原来的纯 Python 架构中，Python 是主进程，ToolRegistry 在 Python 内存里维护着所有工具。list_tools.py 可以直接 import ToolRegistry 并调用 get_all()。
+
+但在新的 Rust + Python 架构中，Rust 是主进程，真正的 ToolRegistry 在 Rust 内存里。Python 退化为被调用的子进程，子进程之间是没有共享内存的，list_tools.py 根本拿不到 Rust 内存里的工具列表。
+
+不过，你原有的 @tool 装饰器机制非常有价值！我们可以通过 “脚本自省” 的方式，让 Rust 借用你原有的装饰器来发现工具。
+
+下面是具体的改造方案：
+
+一、 区分两个概念：发现 vs 执行
+在新架构中，list_tools 这个概念被拆分成了两部分：
+
+供 Rust 发现工具（替代 manifest.json）：
+Rust 需要知道有哪些工具。既然你不想写 manifest.json，我们可以写一个统一的扫描脚本，利用你原有的 @tool 装饰器，把所有工具的元数据导出成 JSON 交给 Rust。
+供 LLM 调用的 list_tools MCP 工具：
+如果 LLM（如 Claude）在对话中主动调用 list_tools 工具，Rust 拦截这个请求，直接从内存里返回列表，根本不需要再启动 Python 进程。
+二、 具体改造方案：写一个 discover.py
+你不需要去改每一个 tools_xxx.py，只需在根目录新建一个 discover.py（或者叫别的名字）。这个脚本的作用是：被 Rust 调用，扫描所有模块，输出 JSON 清单。
+
+python
+
+# discover.py
+import json
+import sys
+import importlib
+
+# 导入你原有的注册中心和日志模块
+from Library.bases.scripts.registry_tools import ToolRegistry
+# 【注意】这里需要 import 所有包含 @tool 的模块，才能触发注册
+# 如果你的 __init__.py 里已经做了自动导入，可以直接 import Library
+import Library 
+from Library.bases.scripts.logs_formatter import ToolsLogManager
+
+def export_tools():
+    """扫描内存中的 ToolRegistry，输出 JSON 给 Rust"""
+    ToolsLogManager.log_info("Rust 请求扫描工具列表...")
+    
+    tools = ToolRegistry.get_all()
+    tools_list = []
+    
+    for name, func in tools.items():
+        # 提取你需要的元数据
+        description = getattr(func, "__doc__", "") or ""
+        
+        # 假设你的 @tool 装饰器或者自定义逻辑能存输入参数的 Schema
+        # 如果没有，这里可能需要写死或者做默认处理
+        input_schema = getattr(func, "input_schema", {"type": "object", "properties": {}})
+        
+        tools_list.append({
+            "name": name,
+            "description": description.strip(),
+            "input_schema": input_schema,
+            # 记录这个工具对应的执行脚本路径
+            # 你可能需要在 @tool 装饰器里加一个 script_path 参数，或者在这里推导
+            "script": getattr(func, "script_path", "unknown_script.py") 
+        })
+    
+    # 输出到 stdout，Rust 会读取这个 JSON
+    print(json.dumps({
+        "status": "success",
+        "tools": tools_list
+    }, ensure_ascii=False))
+
+if __name__ == "__main__":
+    export_tools()
+三、 Rust 端如何使用这个 discover.py？
+当你在网页上点击右上角的“🔄 刷新”按钮时，Rust 做如下操作：
+
+Rust 执行命令：python discover.py
+Rust 读取 stdout 的内容，解析出 JSON。
+Rust 把解析出的工具列表，存入 Rust 内存中的 ToolRegistry。
+Rust 通知 MCP 客户端 list_changed。
+四、 list_tools 这个 MCP 工具还要不要保留？
+建议：不要保留为 Python 工具，改由 Rust 内部直接实现。
+
+既然 Rust 已经在内存中持有了完整的工具列表，当 LLM 调用 list_tools 时，Rust 直接拦截并返回内存数据即可。这比再启动一次 Python 进程去查询要快得多。
+
+在 Rust 中，这只是一个普通的函数：
+
+rust
+
+// Rust 伪代码
+async fn call_tool(name: &str, args: Value) -> Value {
+    if name == "list_tools" {
+        // 直接返回 Rust 内存中的注册表
+        return registry.list_all().to_json();
+    }
+    
+    // 如果是其他工具，才去启动 Python 子进程
+    let script = registry.get_script(name);
+    run_python_script(script, args).await
+}
+总结
+原来的 list_tools.py 作为子进程无法读取 Rust 内存，不能直接复用。
+建议新建一个 discover.py，复用你原有的 ToolRegistry 和 @tool 机制，负责向 Rust 吐出 JSON。
+原来向 LLM 暴露的 list_tools 工具，升级为 Rust 原生内置工具，性能更高。
+你原有的 ToolsLogManager 可以继续在 discover.py 中使用，日志会输出到 stderr，Rust 会自动把它抓取并推送到网页右侧的控制台。
+
+---
+
+在原架构里 ToolRegistry 是存在于一个单独的脚本里的，或者说 MCP 服务器所在的脚本只负责启动服务。
+
+# /// script
+# dependencies = []
+# requires-python = ">=3.10"
+# ///
+"""
+registry_tools - 工具注册中心
+
+功能说明：
+- 提供 MCP 工具注册中心
+- 提供 @tool 装饰器用于注册工具函数
+
+暴露的类：
+- ToolRegistry: 工具注册中心，管理所有已注册的工具
+
+【猫娘修改】：从 tool_registry 重命名，更新文件头。【修改时间】：2026-06-30T12:06:55+08:00
+"""
+
+import logging
+
+# 【猫娘修改】：导入日志格式化模块（从 logs_formatter）。【修改时间】：2026-06-30T12:06:55+08:00
+from Library.bases.scripts.logs_formatter import ToolsLogManager
+# 【猫娘修改】：导入全局键注册中心（从 registry_global_keys）。【修改时间】：2026-06-30T12:06:55+08:00
+from Library.bases.scripts.registry_global_keys import GlobalKeyRegistry
+
+logger = logging.getLogger(__name__)
+
+
+class ToolRegistry:
+    """工具注册中心（支持热插拔）"""
+    _tools: dict = {}
+    # 【猫娘修改】：新增 MCP 实例引用（跨模块持久化，reload 后不丢失）。【修改时间】：2026-06-26T22:35:00.000000+08:00
+    _mcp_instance = None  # type: ignore
+
+    @classmethod
+    def register(cls, name: str, func):
+        """注册工具函数"""
+        cls._tools[name] = func
+        # 【猫娘修改】：自动注册全局键。【修改时间】：2026-06-27T21:30:00.000000+08:00
+        GlobalKeyRegistry.register_tool(name)
+        # 【猫娘修改】：使用日志格式化器。【修改时间】：2026-06-30T12:06:55+08:00
+        ToolsLogManager.log_register("tool", name)
+
+    @classmethod
+    def unregister(cls, name: str):
+        """
+        注销工具函数（热插拔支持）
+        :param name: 要注销的工具名称
+        """
+        # 【猫娘修改】：添加 unregister 支持热插拔。【修改时间】：2026-06-23T23:20:00.000000+08:00
+        if name in cls._tools:
+            del cls._tools[name]
+            # 【猫娘修改】：使用日志格式化器。【修改时间】：2026-06-30T12:06:55+08:00
+            ToolsLogManager.log_unregister("tool", name)
+        else:
+            # 【猫娘修改】：使用日志格式化器。【修改时间】：2026-06-30T12:06:55+08:00
+            ToolsLogManager.log_unregister_warning("tool", name)
+
+    @classmethod
+    def get_all(cls):
+        """获取所有已注册的工具"""
+        return cls._tools.copy()
+
+    @classmethod
+    def clear(cls):
+        """清空注册中心（用于测试）"""
+        # 【猫娘修改】：添加清空日志。【修改时间】：2026-06-23T23:20:00.000000+08:00
+        count = len(cls._tools)
+        cls._tools.clear()
+        # 【猫娘修改】：清空全局键。【修改时间】：2026-06-27T21:30:00.000000+08:00
+        GlobalKeyRegistry().clear()
+        # 【猫娘修改】：使用日志格式化器。【修改时间】：2026-06-30T12:06:55+08:00
+        ToolsLogManager.log_clear("tool", count)
+
+    # 【猫娘修改】：添加 set_mcp_instance 方法（对齐 reload_resources 模式）。【修改时间】：2026-06-26T22:35:00.000000+08:00
+    @classmethod
+    def set_mcp_instance(cls, mcp):
+        """设置 MCP 实例引用（用于 reload_tools 自动同步）"""
+        cls._mcp_instance = mcp
+
+
+# 【猫娘修改】：定义 tool 装饰器（支持 name/description/schema 参数）。【修改时间】：2026-06-26T22:04:33.868306+08:00
+def tool(name: str, description: str = "", schema: dict = None):
+    """
+    工具装饰器
+    将函数注册到 ToolRegistry
+    :param name: 工具名称
+    :param description: 工具描述（可选）
+    :param schema: JSON Schema（可选）
+    """
+    def decorator(func):
+        ToolRegistry.register(name, func)
+        return func
+    return decorator  
+显示完整信息
+
+思考过程
+这份代码非常典型，它在原架构里完美地实现了 Python 进程内的热插拔。但在新的 Rust 主进程 + Python 子进程 架构下，它的角色必须发生转变。
+
+结论：这个文件可以复用，但需要“降级”使用。 它将从“运行时的执行枢纽”退化为“代码扫描器”。
+
+下面详细解释原因和改造方法。
+
+一、 核心矛盾：内存隔离
+在你的原架构中，Python 是主进程，ToolRegistry._tools 字典里存的是函数对象的内存地址。当 MCP 收到请求时，直接 ToolRegistry._tools[name]() 就能执行。
+
+但在新架构中：
+
+Rust 是主进程，内存里没有 Python 的函数。
+每次 LLM 调用工具，Rust 会启动一个全新的 Python 子进程来执行脚本。
+子进程执行完就销毁了，不可能把函数指针传回给 Rust。
+因此，Rust 不可能使用这个 ToolRegistry 来执行工具。Rust 需要的是静态的描述信息（工具名、描述、参数 Schema、对应的脚本路径）。
+
+二、 改造方案：从“注册中心”变成“元数据收集器”
+我们不需要废弃这个文件，而是让它配合 Rust 工作。思路是：保留 @tool 装饰器用于收集元数据，但丢弃它内存里的函数指针。
+
+1. 改造 registry_tools.py
+在原来的基础上，让注册中心多记录一点信息，特别是脚本路径，以便 Rust 知道该去调用谁。
+
+python
+
+# registry_tools.py
+import inspect
+import os
+
+class ToolRegistry:
+    """工具注册中心（新版：专为 Rust 发现工具设计）"""
+    _tools_meta: dict = {}
+
+    @classmethod
+    def register(cls, name: str, func, description: str = "", schema: dict = None):
+        """注册工具元数据"""
+        # 获取定义该函数的脚本绝对路径，Rust 需要这个来启动子进程
+        script_path = os.path.abspath(inspect.getfile(func))
+        
+        cls._tools_meta[name] = {
+            "name": name,
+            "description": description or func.__doc__ or "",
+            "input_schema": schema or {"type": "object", "properties": {}},
+            "script": script_path  # 【关键】记录脚本路径
+        }
+
+    @classmethod
+    def get_all_meta(cls):
+        """获取所有工具的元数据 (供 Rust 调用)"""
+        return list(cls._tools_meta.values())
+
+# 修改装饰器，使其在加载时自动收集元数据
+def tool(name: str, description: str = "", schema: dict = None):
+    def decorator(func):
+        ToolRegistry.register(name, func, description, schema)
+        return func
+    return decorator
+2. 编写统一发现脚本 discover.py
+这个脚本是专门写给 Rust 看的。当 Rust 点击“刷新”时，执行 python discover.py。
+
+python
+
+# discover.py
+import json
+# 导入注册中心
+from Library.bases.scripts.registry_tools import ToolRegistry
+# 【关键】导入所有工具模块，触发 @tool 装饰器执行
+import Library.ai_bridge.scripts.query_ais
+import Library.browser_automation.scripts.tools_navigate
+# ... 导入所有包含工具的模块 ...
+
+if __name__ == "__main__":
+    # 直接把收集到的元数据变成 JSON 打印出来
+    meta = ToolRegistry.get_all_meta()
+    print(json.dumps(meta, ensure_ascii=False, indent=2))
+3. 改造具体的工具脚本（以 tools_navigate.py 为例）
+原来你可能在脚本里只写函数，现在需要加一个 if __name__ == "__main__": 入口，用于接收 Rust 传来的参数并执行。
+
+python
+
+# tools_navigate.py
+import sys
+import json
+from Library.bases.scripts.registry_tools import tool
+
+# 原有的装饰器还在，用于 discover.py 收集信息
+@tool(name="navigate_to_url", description="导航浏览器到指定 URL")
+async def navigate_to_url(url: str):
+    # 原有的业务逻辑
+    return {"status": "success", "url": url}
+
+# 【新增】子进程执行入口
+if __name__ == "__main__":
+    # 1. 从 stdin 读取 Rust 传来的参数
+    raw_input = sys.stdin.read()
+    args = json.loads(raw_input)
+    
+    # 2. 调用原函数（如果是 async 的，需要用 asyncio.run）
+    import asyncio
+    result = asyncio.run(navigate_to_url(**args))
+    
+    # 3. 结果输出到 stdout 给 Rust
+    print(json.dumps(result))
+三、 Rust 端的工作流
+你的 Rust 服务端完全按照这个逻辑来运转：
+
+启动与刷新：
+Rust 执行 python discover.py。
+Rust 读取 stdout 的 JSON 数组，解析出所有的 {name, description, input_schema, script}。
+Rust 将其存入 Rust 内存中的 ToolRegistry。
+网页显示：
+网页从 Rust 读取列表，展示工具。
+LLM 调用工具 (tools/call)：
+LLM 调用 navigate_to_url，参数是 {"url": "..."}。
+Rust 查找内存，发现该工具对应的 script 是 /abs/path/to/tools_navigate.py。
+Rust 启动子进程：python /abs/path/to/tools_navigate.py。
+Rust 将参数 JSON 写入子进程的 stdin。
+Rust 读取子进程的 stdout 作为结果返回给 LLM。
+Rust 读取子进程的 stderr 推送到网页控制台。
+总结
+这套方案的最大好处是：你原有的 Python 代码结构几乎不用动，只需加个入口和改改装饰器。
+
+复杂的状态管理、HTTP 服务、生命周期控制全部交给了 Rust，而 Python 专心致志地做“被调用的脚本”，各司其职，完美解耦。

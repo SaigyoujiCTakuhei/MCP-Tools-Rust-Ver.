@@ -1,0 +1,7 @@
+{
+  "uri": "file://mcp_data/resources/notes.txt",
+  "name": "通知便签",
+  "description": "演示 file 型资源：修改 notes.txt 后直接 resources/read 即可读到最新内容",
+  "mimeType": "text/plain",
+  "file": "notes.txt"
+}

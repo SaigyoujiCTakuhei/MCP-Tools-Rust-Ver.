@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["server", "tool_kit", "tools", "plugins/pdf_reader", "plugins/sequential_thinking"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+strip = true

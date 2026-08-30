@@ -1,0 +1,111 @@
+[package]
+name = "kzm-tools"
+version = "0.1.0"
+edition = "2024"
+
+# 每个工具一个独立二进制（kzm-*），服务器自动发现并加载。
+# 改动某个工具 → `cargo build`（增量编译只重编改动项）→ WebUI/接口「重载」即可生效，
+# 无需重启服务器，不影响其他工具。
+
+[dependencies]
+tool_kit = { path = "../tool_kit" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+regex = "1"
+glob = "0.3"
+hostname = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[[bin]]
+name = "kzm-add"
+path = "src/bin/add.rs"
+
+[[bin]]
+name = "kzm-hello-world"
+path = "src/bin/hello_world.rs"
+
+[[bin]]
+name = "kzm-reverse-text"
+path = "src/bin/reverse_text.rs"
+
+[[bin]]
+name = "kzm-read-file"
+path = "src/bin/read_file.rs"
+
+[[bin]]
+name = "kzm-write-file"
+path = "src/bin/write_file.rs"
+
+[[bin]]
+name = "kzm-delete-file"
+path = "src/bin/delete_file.rs"
+
+[[bin]]
+name = "kzm-file-info"
+path = "src/bin/file_info.rs"
+
+[[bin]]
+name = "kzm-list-directory"
+path = "src/bin/list_directory.rs"
+
+[[bin]]
+name = "kzm-create-directory"
+path = "src/bin/create_directory.rs"
+
+[[bin]]
+name = "kzm-get-system-info"
+path = "src/bin/get_system_info.rs"
+
+[[bin]]
+name = "kzm-get-current-date"
+path = "src/bin/get_current_date.rs"
+
+[[bin]]
+name = "kzm-get-time"
+path = "src/bin/get_time.rs"
+
+[[bin]]
+name = "kzm-run-command"
+path = "src/bin/run_command.rs"
+
+[[bin]]
+name = "kzm-web-fetch"
+path = "src/bin/web_fetch.rs"
+
+[[bin]]
+name = "kzm-web-search"
+path = "src/bin/web_search.rs"
+
+[[bin]]
+name = "kzm-download-file"
+path = "src/bin/download_file.rs"
+
+[[bin]]
+name = "kzm-git-clone"
+path = "src/bin/git_clone.rs"
+
+[[bin]]
+name = "kzm-git-pull"
+path = "src/bin/git_pull.rs"
+
+[[bin]]
+name = "kzm-grep"
+path = "src/bin/grep.rs"
+
+[[bin]]
+name = "kzm-search-files"
+path = "src/bin/search_files.rs"
+
+[[bin]]
+name = "kzm-complex-search"
+path = "src/bin/complex_search.rs"
+
+[[bin]]
+name = "kzm-count-lines"
+path = "src/bin/count_lines.rs"
+
+[[bin]]
+name = "kzm-calculate"
+path = "src/bin/calculate.rs"

@@ -1,0 +1,7 @@
+{
+  "uri": "mcp://kazemimirin/about",
+  "name": "关于本服务器",
+  "description": "KazeMiMiRin MCP Server 的能力速览（工具/提示词/资源三件套，双时代协议）",
+  "mimeType": "text/markdown",
+  "text": "# KazeMiMiRin MCP Server\n\n- 工具：子进程插件（kzm-*），改动后重编译 + 重载即生效，无需重启服务器\n- 提示词：文件驱动（mcp_data/prompts，.json 或带 YAML front matter 的 .md）\n- 资源：文件驱动（mcp_data/resources，file 型资源每次读取最新内容）\n- 协议：现代 2026-07-28（POST /mcp）+ Legacy 2024-11-05（/sse + /message）\n"
+}

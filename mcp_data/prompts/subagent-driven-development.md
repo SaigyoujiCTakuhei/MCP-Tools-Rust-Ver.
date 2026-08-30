@@ -1,0 +1,156 @@
+---
+name: subagent-driven-development
+description: "Use when delegating implementation tasks to subagents. Triggers on plan execution, parallel task dispatching, code review delegation. Keywords: subagent, delegation, parallel, execution, review."
+license: MIT
+metadata:
+  author: kaze-mimirin
+  version: "1.0"
+  created: "2026-06-04"
+  category: development
+allowed-tools: Read Write Bash
+params:
+  - name: plan_file_or_text
+    type: string
+    required: false
+    description: 实现计划（文件路径或直接粘贴计划文本）
+  - name: review_scope
+    type: string
+    required: false
+    description: 审查范围（all/selective），决定审查的任务范围
+  - name: max_subagents
+    type: integer
+    required: false
+    description: 最大并发子智能体数量（防止资源耗尽）
+---
+---
+
+# 子智能体驱动开发
+
+## 概述
+
+通过为每个任务分派一个全新的子智能体来执行计划，每个任务完成后进行两阶段审查：先审查规格合规性，再审查代码质量。
+
+**核心原则：** 每个任务一个全新子智能体 + 两阶段审查（先规格后质量）= 高质量、快速迭代
+
+<EXTREMELY-IMPORTANT>
+每个任务一个全新子智能体 + 两阶段审查 = 高质量、快速迭代
+</EXTREMELY-IMPORTANT>
+
+## 铁律
+
+```
+每个任务一个全新子智能体 + 两阶段审查
+```
+
+## 参数说明
+
+| 参数 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| plan_file_or_text | string | 否 | 实现计划（文件路径或直接粘贴计划文本） |
+| review_scope | string | 否 | 审查范围（all/selective），决定审查的任务范围 |
+| max_subagents | integer | 否 | 最大并发子智能体数量（防止资源耗尽） |
+
+## 何时使用
+
+```
+有实现计划？ -> 是 -> 任务基本独立？ -> 是 -> 留在当前会话？ -> 是 -> subagent-driven-development
+                                        -> 否 -> 手动执行或先头脑风暴
+                      -> 否 -> 手动执行或先头脑风暴
+```
+
+**与 Executing Plans（并行会话）的对比：**
+- 同一会话（无上下文切换）
+- 每个任务全新子智能体（无上下文污染）
+- 每个任务后两阶段审查：先规格合规性，再代码质量
+- 更快的迭代（任务间无需人工介入）
+
+## 流程
+
+```
+读取计划，提取所有任务的完整文本，记录上下文，创建 TodoWrite
+    ↓
+还有剩余任务？ -> 是 -> 分派实现子智能体 -> 实现子智能体实现、测试、提交、自审
+    ↓                                              ↓
+分派最终代码审查                               分派规格审查子智能体
+    ↓                                              ↓
+使用 finishing-a-development-branch              规格审查通过？ -> 是 -> 分派代码质量审查
+                                                   ↓
+                                                 代码质量审查通过？ -> 是 -> 标记任务完成
+```
+
+## 模型选择
+
+使用能胜任每个角色的最低成本模型，以节省开支并提高速度。
+
+**机械性实现任务**（隔离的函数、清晰的规格、1-2 个文件）：使用快速、便宜的模型。
+
+**集成和判断类任务**（多文件协调、模式匹配、调试）：使用标准模型。
+
+**架构、设计和审查类任务**：使用最强的可用模型。
+
+**任务复杂度信号：**
+- 涉及 1-2 个文件且有完整规格 → 便宜模型
+- 涉及多个文件且有集成考虑 → 标准模型
+- 需要设计判断或广泛的代码库理解 → 最强模型
+
+## 处理实现者状态
+
+实现子智能体报告四种状态之一。根据每种状态进行相应处理：
+
+**DONE：** 进入规格合规性审查。
+
+**DONE_WITH_CONCERNS：** 实现者完成了工作但标记了疑虑。在继续之前阅读这些疑虑。
+
+**NEEDS_CONTEXT：** 实现者需要未提供的信息。提供缺失的上下文并重新分派。
+
+**BLOCKED：** 实现者无法完成任务。评估阻塞原因：
+1. 如果是上下文问题，提供更多上下文并用同一模型重新分派
+2. 如果任务需要更强的推理能力，用更强的模型重新分派
+3. 如果任务太大，拆分为更小的部分
+4. 如果计划本身有问题，上报给人类
+
+## 红线
+
+**绝不：**
+
+- 未经用户明确同意就在 main/master 分支上开始实现
+- 跳过审查（规格合规性或代码质量）
+- 带着未修复的问题继续
+- 并行分派多个实现子智能体（会冲突）
+- 让子智能体读取计划文件（应提供完整文本）
+- 跳过场景铺设上下文（子智能体需要理解任务在哪个环节）
+- 忽视子智能体的问题（在让它们继续之前先回答）
+- 在规格合规性上接受"差不多就行"（规格审查者发现问题 = 未完成）
+- 跳过审查循环（审查者发现问题 = 实现者修复 = 再次审查）
+- 让实现者的自审替代正式审查（两者都需要）
+- **在规格合规性审查通过之前开始代码质量审查**（顺序错误）
+- 在任一审查有未解决问题时就进入下一个任务
+
+**如果子智能体提问：**
+- 清晰完整地回答
+- 必要时提供额外上下文
+- 不要催促它们进入实现阶段
+
+**如果审查者发现问题：**
+- 实现者（同一子智能体）修复
+- 审查者再次审查
+- 重复直到通过
+- 不要跳过重新审查
+
+**如果子智能体失败：**
+- 分派修复子智能体并提供具体指令
+- 不要尝试手动修复（上下文污染）
+
+## 集成
+
+**必需的工作流技能：**
+- **superpowers:using-git-worktrees** - 必需：在开始前建立隔离工作区
+- **superpowers:writing-plans** - 创建本技能执行的计划
+- **superpowers:requesting-code-review** - 审查子智能体的代码审查模板
+- **superpowers:finishing-a-development-branch** - 所有任务完成后收尾
+
+**子智能体应使用：**
+- **superpowers:test-driven-development** - 子智能体对每个任务遵循 TDD
+
+**替代工作流：**
+- **superpowers:executing-plans** - 用于并行会话而非同会话执行

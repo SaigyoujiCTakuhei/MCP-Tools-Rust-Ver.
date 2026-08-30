@@ -1,0 +1,116 @@
+---
+name: dispatching-parallel-agents
+description: "Use when dispatching multiple independent tasks to parallel agents. Triggers on parallel execution, concurrent tasks, independent subtasks. Keywords: parallel, concurrent, dispatch, agents, independent."
+params:
+  - name: task_list
+    type: string
+    required: false
+    description: 需要并行分派的任务列表，每个任务应为独立的问题域
+  - name: context
+    type: string
+    required: false
+    description: 共享上下文信息（可选，用于提供必要的背景知识）
+  - name: output_format
+    type: string
+    required: false
+    description: 输出格式要求（如：JSON/Markdown/纯文本）
+---
+---
+
+# 并行分派智能体
+
+## 概述
+
+你将任务委派给具有隔离上下文的专用智能体。通过精心设计它们的指令和上下文，确保它们专注并成功完成任务。它们不应继承你的会话上下文或历史记录——你要精确构造它们所需的一切。这样也能为你自己保留用于协调工作的上下文。
+
+**核心原则：** 每个独立问题域分派一个智能体，让它们并发工作。
+
+<EXTREMELY-IMPORTANT>
+每个独立问题域分派一个智能体，让它们并发工作
+</EXTREMELY-IMPORTANT>
+
+## 铁律
+
+```
+每个独立问题域分派一个智能体
+```
+
+## 参数说明
+
+| 参数 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| task_list | string | 否 | 需要并行分派的任务列表，每个任务应为独立的问题域 |
+| context | string | 否 | 共享上下文信息（可选，用于提供必要的背景知识） |
+| output_format | string | 否 | 输出格式要求（如：JSON/Markdown/纯文本） |
+
+## 何时使用
+
+```
+存在多个失败？ -> 是 -> 它们是否独立？ -> 是 -> 能否并行工作？ -> 是 -> 并行分派
+                                      -> 否 -> 单个智能体排查所有问题
+                   -> 否 -> 单个智能体排查所有问题
+```
+
+**适用场景：**
+- 3 个以上测试文件因不同根因失败
+- 多个子系统独立出现故障
+- 每个问题无需其他问题的上下文即可理解
+- 排查之间无共享状态
+
+**不适用场景：**
+- 失败是相关的（修复一个可能修复其他的）
+- 需要理解完整的系统状态
+- 智能体之间会互相干扰
+
+## 流程
+
+### 步骤 1：识别独立的问题域
+
+按故障分组：
+- 文件 A 测试：工具审批流程
+- 文件 B 测试：批量完成行为
+- 文件 C 测试：中止功能
+
+每个问题域是独立的——修复工具审批不会影响中止测试。
+
+### 步骤 2：创建聚焦的智能体任务
+
+每个智能体获得：
+- **明确范围：** 一个测试文件或子系统
+- **清晰目标：** 让这些测试通过
+- **约束条件：** 不修改其他代码
+- **预期输出：** 你发现和修复内容的总结
+
+### 步骤 3：并行分派
+
+```typescript
+// 在 Claude Code / AI 环境中
+Task("修复 agent-tool-abort.test.ts 的失败")
+Task("修复 batch-completion-behavior.test.ts 的失败")
+Task("修复 tool-approval-race-conditions.test.ts 的失败")
+// 三个任务并发运行
+```
+
+### 步骤 4：审查与集成
+
+当智能体返回时：
+- 阅读每个总结
+- 验证修复之间没有冲突
+- 运行完整测试套件
+- 集成所有更改
+
+## 智能体提示词结构
+
+好的智能体提示词应该是：
+1. **聚焦的** - 一个清晰的问题域
+2. **自包含的** - 包含理解问题所需的所有上下文
+3. **明确输出要求** - 智能体应该返回什么？
+
+## 常见错误
+
+| 错误做法 | 正确做法 |
+|------|------|
+| 将相关任务分派给不同智能体 | 将独立任务分派，相关任务由同一智能体处理 |
+| 提供过多共享上下文 | 仅提供必要的共享上下文 |
+| 不定义明确的输出格式 | 明确定义每个智能体的输出格式 |
+| 不设置完成标准 | 为每个任务设置明确的完成标准 |

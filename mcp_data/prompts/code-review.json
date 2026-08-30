@@ -1,0 +1,10 @@
+{
+  "name": "code-review",
+  "title": "代码评审",
+  "description": "按规范评审一段代码，关注正确性、可读性与边界情况",
+  "arguments": [
+    { "name": "language", "description": "编程语言", "required": false },
+    { "name": "code", "description": "待评审代码", "required": true }
+  ],
+  "template": "请以资深工程师视角评审以下 {{language}} 代码，关注：\n1. 正确性与边界情况\n2. 可读性与命名\n3. 潜在的性能与安全问题\n\n代码：\n```\n{{code}}\n```"
+}

@@ -1,0 +1,2 @@
+这是服务器通知文件的最新内容。用资源管理器修改本文件（mcp_data/resources/notes.txt）后，
+无需任何重载操作——file 型资源在每次 resources/read 时都会读取磁盘上的最新版本。

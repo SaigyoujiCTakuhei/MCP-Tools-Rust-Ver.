@@ -1,0 +1,43 @@
+[package]
+name = "kazemimirin-mcp-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# 工具子进程契约（ToolDecl / ToolOutput）
+tool_kit = { path = "../tool_kit" }
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+# HTTP 服务器
+axum = { version = "0.7", features = ["ws", "macros"] }
+# HTTP 类型（CorsLayer 的 Method / HeaderName）
+http = "1"
+# CORS 中间件
+tower-http = { version = "0.6", features = ["cors"] }
+# 异步流构造（SSE 订阅长流）
+async-stream = "0.3"
+# 配置解析
+serde = { workspace = true }
+serde_yaml = "0.9"
+serde_json = { workspace = true }
+# 并发哈希表
+dashmap = "6"
+# 异步 trait
+async-trait = "0.1"
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+# 错误处理
+anyhow = { workspace = true }
+# Stream 抽象（SSE 流）
+futures = "0.3"
+# 文件系统
+fs-err = { version = "3", features = ["tokio"] }
+# 时间（日志时间戳）
+chrono = { workspace = true }
+# 输入 JSON Schema 校验（规范 MUST：validate all tool inputs）
+jsonschema = "0.52.0"
+
+[features]
+default = []
+dev = []

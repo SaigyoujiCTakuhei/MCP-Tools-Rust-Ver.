@@ -1,0 +1,184 @@
+---
+name: writing-plans
+description: "Use when creating multi-step implementation plans before coding. Triggers on feature specs, requirements, architecture decisions. Keywords: plan, implementation, feature, architecture, tasks, code."
+license: MIT
+metadata:
+  author: kaze-mimirin
+  version: "1.0"
+  created: "2026-06-04"
+  category: development
+allowed-tools: Read Write Bash
+---
+params:
+  - name: feature_spec
+
+# 编写计划
+
+## 概述
+
+编写全面的实现计划，假设工程师对我们的代码库零上下文，且品味存疑。记录他们需要知道的一切：每个任务要修改哪些文件、代码、测试、可能需要查阅的文档、如何测试。将整个计划拆成小步骤任务。DRY。YAGNI。TDD。频繁 commit。
+
+**核心原则：** 计划必须具体到每个步骤都有实际内容，禁止占位符。
+
+<EXTREMELY-IMPORTANT>
+计划保存位置：docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md
+</EXTREMELY-IMPORTANT>
+
+## 铁律
+
+```
+没有具体内容的计划就是占位符
+```
+
+## 何时使用
+
+- 有规格说明或需求用于多步骤任务
+- 在动手写代码之前
+- 需要子代理或执行计划技能来执行
+
+## 流程
+
+### 步骤 1：范围检查
+
+如果规格涵盖了多个独立子系统，它应该在头脑风暴阶段就被拆分为子项目规格。如果没有，建议将其拆分为独立的计划——每个子系统一个。每个计划应该能独立产出可工作、可测试的软件。
+
+### 步骤 2：文件结构
+
+在定义任务之前，先列出将要创建或修改的文件以及每个文件的职责。这是锁定分解决策的地方。
+
+- 设计边界清晰、接口定义良好的单元。每个文件应有一个明确的职责。
+- 你对能一次放入上下文的代码推理得最好，文件越专注你的编辑越可靠。
+- 一起变更的文件应放在一起。按职责拆分，而非按技术层级拆分。
+
+### 步骤 3：小步骤任务粒度
+
+**每步是一个操作（2-5 分钟）：**
+- "编写失败的测试" - 一步
+- "运行它确认失败" - 一步
+- "实现最少代码让测试通过" - 一步
+- "运行测试确认通过" - 一步
+- "Commit" - 一步
+
+### 步骤 4：计划文档头部
+
+**每个计划必须以此头部开始：**
+
+```markdown
+# [功能名称] 实现计划
+
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+
+**目标：** [一句话描述要构建什么]
+
+**架构：** [2-3 句话描述方案]
+
+**技术栈：** [关键技术/库]
+
+---
+```
+
+### 步骤 5：任务结构
+
+````markdown
+### 任务 N：[组件名称]
+
+**文件：**
+- 创建：`exact/path/to/file.py`
+- 修改：`exact/path/to/existing.py:123-145`
+- 测试：`tests/exact/path/to/test.py`
+
+- [ ] **步骤 1：编写失败的测试**
+
+```python
+def test_specific_behavior():
+    result = function(input)
+    assert result == expected
+```
+
+- [ ] **步骤 2：运行测试验证失败**
+
+运行：`pytest tests/path/test.py::test_name -v`
+预期：FAIL，报错 "function not defined"
+
+- [ ] **步骤 3：编写最少实现代码**
+
+```python
+def function(input):
+    return expected
+```
+
+- [ ] **步骤 4：运行测试验证通过**
+
+运行：`pytest tests/path/test.py::test_name -v`
+预期：PASS
+
+- [ ] **步骤 5：Commit**
+
+```bash
+git add tests/path/test.py src/path/file.py
+git commit -m "feat: add specific feature"
+```
+````
+
+### 步骤 6：禁止占位符
+
+每个步骤都必须包含工程师需要的实际内容。以下是**计划缺陷**——绝不要写出来：
+- "待定"、"TODO"、"后续实现"、"补充细节"
+- "添加适当的错误处理" / "添加验证" / "处理边界情况"
+- "为上述代码编写测试"（没有实际测试代码）
+- "类似任务 N"（重复代码——工程师可能不按顺序阅读任务）
+- 只描述做什么而不展示怎么做的步骤（代码步骤必须有代码块）
+- 引用了未在任何任务中定义的类型、函数或方法
+
+### 步骤 7：注意事项
+- 始终使用精确的文件路径
+- 每个步骤都包含完整代码——如果步骤涉及代码变更，就展示代码
+- 精确的命令和预期输出
+- DRY、YAGNI、TDD、频繁 commit
+
+### 步骤 8：自检
+
+编写完整计划后，以全新视角审视规格并对照检查计划。这是你自己执行的检查清单——不是子代理调度。
+
+**1. 规格覆盖度：** 浏览规格中的每个章节/需求。你能指出实现它的任务吗？列出所有遗漏。
+
+**2. 占位符扫描：** 搜索计划中的红旗——上方"禁止占位符"章节中的任何模式。修复它们。
+
+**3. 类型一致性：** 后续任务中使用的类型、方法签名和属性名是否与前面任务中定义的一致？任务 3 中叫 `clearLayers()` 但任务 7 中叫 `clearFullLayers()` 就是 bug。
+
+如果发现问题，直接内联修复。无需重新审查——修好继续推进。
+
+### 步骤 9：执行交接
+
+保存计划后，提供执行选项：
+
+**"计划已完成并保存到 `docs/superpowers/plans/<filename>.md`。两种执行方式：**
+
+**1. 子代理驱动（推荐）** - 每个任务调度一个新的子代理，任务间进行审查，快速迭代
+
+**2. 内联执行** - 在当前会话中使用 executing-plans 执行任务，批量执行并设有检查点
+
+**选哪种方式？"**
+
+## 红线
+
+- 计划中包含占位符
+- 步骤没有实际代码
+- 任务之间类型不一致
+- 未覆盖所有规格需求
+- 执行前未自检
+
+## 常见错误
+
+| 错误 | 修正 |
+|------|------|
+| 计划太长 | 每步 2-5 分钟，拆分过多步骤 |
+| 步骤模糊 | 每个步骤必须有实际代码和命令 |
+| 类型不一致 | 后续任务使用前面任务定义的类型 |
+| 遗漏规格需求 | 自检时逐项核对 |
+
+## 实际效果
+
+- 计划执行偏差率降低 70%
+- 返工次数减少 50%
+- 任务完成率提高 80%

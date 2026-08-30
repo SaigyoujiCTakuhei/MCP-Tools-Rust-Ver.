@@ -1,0 +1,24 @@
+[package]
+name = "kzm-sequential-thinking"
+version = "0.1.0"
+edition = "2024"
+
+# v11 Lib/sequential_thinking 模块的 Rust 移植（按功能分目录的第二个域插件）
+# 文件划分与 v11 一一对应：
+#   scripts/thinking_core.py → src/thinking_core.rs（纯 def 库，不暴露为工具）
+#   scripts/tool_register.py → src/bin/kzm-sequentialthinking.rs（@tool 注册薄壳）
+#   scripts/config.py        → src/config.rs
+#   scripts/test_*.py        → thinking_core.rs 内 #[cfg(test)]
+# 与 v11 的差异（子进程模型下的状态归属）：
+#   v11 用 thread_local 把思维链状态存在服务器进程内存里；本移植按 MCP 规范
+#   Stateful Tools 要求改为显式句柄——可选参数 sessionId（缺省 "default"），
+#   状态持久化到 mcp_data/sequential_thinking/state-<sessionId>.json，跨调用续链。
+
+[dependencies]
+tool_kit = { path = "../../tool_kit" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "kzm-sequentialthinking"
+path = "src/bin/kzm_sequentialthinking.rs"
