@@ -6,6 +6,8 @@
 use serde_json::{json, Value};
 use tool_kit::{kzm_tool, ToolAnnotations, ToolDecl, ToolOutput};
 
+// 共享库按二进制分别编译；未用到的部分是预期内的（豁免 dead_code）
+#[allow(dead_code)]
 #[path = "../lib.rs"]
 mod memory;
 
@@ -16,12 +18,8 @@ fn run(args: Value) -> ToolOutput {
     let source = args["source"].as_str().unwrap_or("manual");
     let source_date = args["source_date"].as_str();
 
-    // 1. 嵌入（先算嵌入，避免无效内容先写库）
-    let mut embedder = match memory::Embedder::new() {
-        Ok(e) => e,
-        Err(e) => return ToolOutput::err(format!("{e:#}")),
-    };
-    let vecs = match embedder.embed(vec![content.to_string()]) {
+    // 1. 嵌入（路由：≤5 条冷启动/热复用；常驻不可用回退冷启动）
+    let vecs = match memory::embed_texts(vec![content.to_string()]) {
         Ok(v) => v,
         Err(e) => return ToolOutput::err(format!("{e:#}")),
     };

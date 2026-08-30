@@ -15,6 +15,11 @@
 
 use anyhow::{anyhow, Context};
 use postgres::{Client, NoTls};
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
+use std::time::Duration;
 
 pub const EMBED_DIMS: usize = 512;
 pub const DEFAULT_MODEL_DIR: &str =
@@ -88,4 +93,126 @@ impl Embedder {
         }
         Ok(out)
     }
+}
+
+// ==================== 常驻嵌入服务（daemon）与阈值路由 ====================
+//
+// 规则（用户定义）：
+//   - 一次读写超过 RESIDENT_THRESHOLD 条 → 使用常驻服务（不在则孵化，模型加载一次）
+//   - 常驻服务空闲 KZM_MEMORY_DAEMON_IDLE_SECS（缺省 600 = 10 分钟）无新调用 → 自行卸载
+//   - ≤ 阈值的小读写 → 冷启动；但若常驻服务已在运行则复用（顺便刷新空闲计时）
+//   - 常驻服务不可用时一律回退冷启动（降级不失败）
+
+pub const RESIDENT_THRESHOLD: usize = 5;
+
+pub fn daemon_socket_path() -> PathBuf {
+    PathBuf::from(
+        std::env::var("KZM_MEMORY_DAEMON_SOCK").unwrap_or_else(|_| "/tmp/kzm-memory-daemon.sock".into()),
+    )
+}
+
+pub fn daemon_idle_secs() -> u64 {
+    std::env::var("KZM_MEMORY_DAEMON_IDLE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600)
+}
+
+fn daemon_bin_path() -> PathBuf {
+    if let Ok(p) = std::env::var("KZM_MEMORY_DAEMON_BIN") {
+        return PathBuf::from(p);
+    }
+    // 守护进程与工具二进制同目录（不带 kzm- 前缀，不参与插件发现）
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("memory-daemon")))
+        .unwrap_or_else(|| PathBuf::from("memory-daemon"))
+}
+
+/// 探活：socket 可连且 ping 应答
+pub fn daemon_ping() -> bool {
+    daemon_request(&json!({ "op": "ping" }))
+        .map(|v| v.get("ok").and_then(Value::as_bool).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// 单连接单请求：发送 NDJSON 请求行，读取一行响应
+fn daemon_request(req: &Value) -> anyhow::Result<Value> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut stream = UnixStream::connect(daemon_socket_path())
+        .with_context(|| format!("连接嵌入服务失败: {}", daemon_socket_path().display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    stream
+        .write_all(serde_json::to_string(req)?.as_bytes())
+        .and_then(|_| stream.write_all(b"\n"))
+        .and_then(|_| stream.flush())
+        .context("发送嵌入请求失败")?;
+    let mut line = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut line)
+        .context("读取嵌入响应失败")?;
+    serde_json::from_str(line.trim()).context("嵌入响应不是合法 JSON")
+}
+
+/// 孵化守护进程并等待就绪（模型加载需要数秒，轮询 socket 至多 120 秒）
+fn daemon_spawn_and_wait() -> anyhow::Result<()> {
+    let bin = daemon_bin_path();
+    let sock = daemon_socket_path();
+    if !bin.exists() {
+        anyhow::bail!("守护进程二进制不存在: {}", bin.display());
+    }
+    let _ = std::fs::remove_file(&sock); // 清理陈旧 socket
+    std::process::Command::new(&bin)
+        .arg("serve")
+        .spawn()
+        .with_context(|| format!("孵化嵌入守护进程失败: {}", bin.display()))?;
+    // 孤儿化：Child 立即 drop，由 init 收养，父进程退出不影响
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while std::time::Instant::now() < deadline {
+        if daemon_ping() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    anyhow::bail!("等待嵌入守护进程就绪超时（120 秒）")
+}
+
+fn daemon_embed(texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+    let resp = daemon_request(&json!({ "op": "embed", "texts": texts }))?;
+    if resp.get("ok").and_then(Value::as_bool) != Some(true) {
+        anyhow::bail!(
+            "嵌入服务返回错误: {}",
+            resp.get("error").and_then(Value::as_str).unwrap_or("未知")
+        );
+    }
+    serde_json::from_value(resp.get("vectors").cloned().unwrap_or(Value::Null))
+        .context("嵌入响应 vectors 解析失败")
+}
+
+/// 嵌入路由（唯一入口）：
+///   > 阈值 → 常驻服务（不在则孵化）；≤ 阈值 → 冷启动，但常驻已在则复用；
+///   常驻不可用 → 一律回退冷启动。
+pub fn embed_texts(texts: Vec<String>) -> anyhow::Result<Vec<Vec<f32>>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let threshold = std::env::var("KZM_MEMORY_RESIDENT_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(RESIDENT_THRESHOLD);
+    let alive = daemon_ping();
+    if texts.len() > threshold || alive {
+        let routed = (|| {
+            if !alive {
+                daemon_spawn_and_wait()?;
+            }
+            daemon_embed(&texts)
+        })();
+        match routed {
+            Ok(v) => return Ok(v),
+            Err(e) => eprintln!("[memory] 常驻嵌入服务不可用（{e:#}），回退冷启动"),
+        }
+    }
+    Embedder::new()?.embed(texts)
 }

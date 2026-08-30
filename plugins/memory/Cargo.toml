@@ -11,6 +11,7 @@ edition = "2024"
 
 [dependencies]
 tool_kit = { path = "../../tool_kit" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -37,3 +38,12 @@ path = "src/bin/memory_list.rs"
 [[bin]]
 name = "kzm-memory-forget"
 path = "src/bin/memory_forget.rs"
+
+[[bin]]
+name = "kzm-memory-import"
+path = "src/bin/memory_import.rs"
+
+# 常驻嵌入服务（无 kzm- 前缀，不参与插件发现；由工具按需孵化，空闲自卸载）
+[[bin]]
+name = "memory-daemon"
+path = "src/bin/memory-daemon.rs"

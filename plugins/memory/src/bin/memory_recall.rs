@@ -6,6 +6,8 @@
 use serde_json::{json, Value};
 use tool_kit::{kzm_tool, ToolAnnotations, ToolDecl, ToolOutput};
 
+// 共享库按二进制分别编译；未用到的部分是预期内的（豁免 dead_code）
+#[allow(dead_code)]
 #[path = "../lib.rs"]
 mod memory;
 
@@ -16,11 +18,7 @@ fn run(args: Value) -> ToolOutput {
     let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 50) as i64;
     let source = args["source"].as_str();
 
-    let mut embedder = match memory::Embedder::new() {
-        Ok(e) => e,
-        Err(e) => return ToolOutput::err(format!("{e:#}")),
-    };
-    let vecs = match embedder.embed(vec![query.to_string()]) {
+    let vecs = match memory::embed_texts(vec![query.to_string()]) {
         Ok(v) => v,
         Err(e) => return ToolOutput::err(format!("{e:#}")),
     };

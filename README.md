@@ -197,6 +197,6 @@ keep-alive 长连接最多拖延 10 秒后强制退出。
 | 工具加载失败可见 | ✅ ERROR 日志 |
 | pdf_reader（PyPDF2：pdf_read_local / pdf_read_url） | ✅ `plugins/pdf_reader/`（pdf-extract 纯 Rust），首个按功能分目录的域插件 |
 | sequential_thinking（thread_local 状态） | ✅ `plugins/sequential_thinking/`；状态改为显式 `sessionId` 句柄 + `mcp_data/sequential_thinking/` 持久化（MCP Stateful Tools 规范模式），thinking_core 纯库含 4 个单元测试 |
-| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用既有 `memory_chunks` 表（PG 17 + pgvector HNSW，172 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
+| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用 dsh 记忆插件的 `memory_chunks` 表（PG 17 + pgvector HNSW，现 188 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
 | ai_bridge / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
 | python_eval / evolution / create_tool 等 Python 机制 | ➖ 不移植（Rust 编译期注册已替代其框架职责） |
