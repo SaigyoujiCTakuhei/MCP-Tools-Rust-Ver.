@@ -1,0 +1,39 @@
+[package]
+name = "kzm-memory"
+version = "0.1.0"
+edition = "2024"
+
+# 长期记忆域插件（PostgreSQL + pgvector）
+# 复用既有表 public.memory_chunks（id/source/source_date/content/embedding vector(512)，
+# HNSW 索引已建，存量 172 条），嵌入模型 bge-small-zh-v1.5（本地 ONNX，512 维）。
+# 工具：kzm-memory-remember（存）/ recall（语义检索）/ list（浏览）/ forget（删除）
+# 工具名沿用 v11 memory 模块的记忆动词。
+
+[dependencies]
+tool_kit = { path = "../../tool_kit" }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+# PG 同步客户端（子进程内同步无碍；Unix socket peer 认证免密）
+postgres = { version = "0.19", features = ["with-chrono-0_4"] }
+# vector 类型的 ToSql/FromSql（二进制协议）
+pgvector = { version = "0.4", features = ["postgres"] }
+# 本地嵌入：fastembed（内含 ort + tokenizers），模型指向本地 Xenova 目录，无需下载。
+# 禁用默认特性（hf-hub / native-tls 会拉 openssl），改用 rustls 变体——与全项目 rustls-only 一致
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls"] }
+
+[[bin]]
+name = "kzm-memory-remember"
+path = "src/bin/memory_remember.rs"
+
+[[bin]]
+name = "kzm-memory-recall"
+path = "src/bin/memory_recall.rs"
+
+[[bin]]
+name = "kzm-memory-list"
+path = "src/bin/memory_list.rs"
+
+[[bin]]
+name = "kzm-memory-forget"
+path = "src/bin/memory_forget.rs"

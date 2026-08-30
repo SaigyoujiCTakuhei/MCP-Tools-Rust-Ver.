@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["server", "tool_kit", "tools", "plugins/pdf_reader", "plugins/sequential_thinking"]
+members = ["server", "tool_kit", "tools", "plugins/pdf_reader", "plugins/sequential_thinking", "plugins/memory"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

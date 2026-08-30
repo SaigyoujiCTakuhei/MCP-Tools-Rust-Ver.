@@ -11,7 +11,7 @@
 
 | 维度 | 说明 |
 |------|------|
-| 工具 | 25 个 = 23 通用（`tools/`）+ 2 PDF（`plugins/pdf_reader/`），全部 `kzm-*` 子进程插件，启动自动发现；失败写 ERROR 日志 |
+| 工具 | 30 个 = 23 通用（`tools/`）+ 7 域插件（`plugins/`：pdf_reader 2、sequential_thinking 1、memory 4），全部 `kzm-*` 子进程插件，启动自动发现；失败写 ERROR 日志 |
 | 热重载 | 改工具源码 → `cargo build` → WebUI「⟳ 重载」即生效，不影响其他工具、不重启服务器 |
 | 协议面 | 现代 2026-07-28（`POST /mcp`）+ Legacy 2024-11-05（`GET /sse` + `POST /message`） |
 | 提示词/资源 | 文件驱动（`mcp_data/prompts`、`mcp_data/resources`），热重载并经协议列出（`prompts/list`、`resources/list`） |
@@ -46,14 +46,16 @@ New_Architecture_v00/
 │       └── dashboard/         # WebUI（api.rs + html.rs）
 ├── tool_kit/                  # 插件契约：ToolDecl / ToolOutput / kzm_tool! 宏
 ├── tools/src/bin/             # 23 个通用工具插件（kzm-*.rs，一个工具一个二进制）
-└── plugins/                   # 域插件目录（按功能一域一 crate，对应 v11 的 Lib/<模块>/）
-    ├── pdf_reader/            # v11 pdf_reader 移植：pdf_read_local / pdf_read_url
-    │   ├── src/pdf_utils.rs   # 公共函数（对应 v11 的 scripts/pdf_utils.py）
-    │   └── src/bin/           # kzm-pdf-read-local、kzm-pdf-read-url
-    └── sequential_thinking/   # v11 sequential_thinking 移植：sequentialthinking（含状态）
-        ├── src/thinking_core.rs  # 纯 def 库（对应 scripts/thinking_core.py，含单元测试）
-        ├── src/config.rs         # 常量（对应 scripts/config.py）
-        └── src/bin/              # kzm-sequentialthinking（对应 scripts/tool_register.py）
+├── plugins/                   # 域插件目录（按功能一域一 crate，对应 v11 的 Lib/<模块>/）
+│   ├── pdf_reader/            # v11 pdf_reader 移植：pdf_read_local / pdf_read_url
+│   │   ├── src/pdf_utils.rs   # 公共函数（对应 v11 的 scripts/pdf_utils.py）
+│   │   └── src/bin/           # kzm-pdf-read-local、kzm-pdf-read-url
+│   ├── sequential_thinking/   # v11 sequential_thinking 移植：sequentialthinking（含状态）
+│   │   ├── src/thinking_core.rs  # 纯 def 库（对应 scripts/thinking_core.py，含单元测试）
+│   │   ├── src/config.rs         # 常量（对应 scripts/config.py）
+│   │   └── src/bin/              # kzm-sequentialthinking（对应 scripts/tool_register.py）
+│   └── memory/                # 长期记忆（PG + pgvector）：kzm-memory-{remember,recall,list,forget}
+├── 长期记忆功能方案.md          # memory 设计方案（P1 已按决策落地）
 ```
 
 > **新增域插件**：在 `plugins/<域名>/` 建一个 crate（members 加一行），每个工具一个
@@ -195,5 +197,6 @@ keep-alive 长连接最多拖延 10 秒后强制退出。
 | 工具加载失败可见 | ✅ ERROR 日志 |
 | pdf_reader（PyPDF2：pdf_read_local / pdf_read_url） | ✅ `plugins/pdf_reader/`（pdf-extract 纯 Rust），首个按功能分目录的域插件 |
 | sequential_thinking（thread_local 状态） | ✅ `plugins/sequential_thinking/`；状态改为显式 `sessionId` 句柄 + `mcp_data/sequential_thinking/` 持久化（MCP Stateful Tools 规范模式），thinking_core 纯库含 4 个单元测试 |
-| ai_bridge / memory / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
+| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用既有 `memory_chunks` 表（PG 17 + pgvector HNSW，172 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
+| ai_bridge / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
 | python_eval / evolution / create_tool 等 Python 机制 | ➖ 不移植（Rust 编译期注册已替代其框架职责） |
