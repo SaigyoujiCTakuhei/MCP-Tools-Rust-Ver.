@@ -7,7 +7,7 @@
 //! 通过 fastembed 的 user-defined 模式直接读取平铺目录，不经 hf-hub 缓存、不联网。
 //!
 //! 环境变量：
-//! - `KZM_MEMORY_DSN`       — PG 连接串；缺省 `postgresql:///dsh_memory?host=/var/run/postgresql`
+//! - `KZM_MEMORY_DSN`       — PG 连接串；缺省 `postgresql:///Agent_Memories?host=/var/run/postgresql`
 //!                            （Unix socket + peer 认证，本机用户 p 与 PG 角色 p 同名，免密）
 //! - `KZM_MEMORY_MODEL_DIR` — 模型目录；缺省 `/home/p/AI Related/Embedding Models/bge-small-zh-v1.5/Xenova`
 //!                            （须含 model.onnx / tokenizer.json / config.json /
@@ -19,7 +19,7 @@ use postgres::{Client, NoTls};
 pub const EMBED_DIMS: usize = 512;
 pub const DEFAULT_MODEL_DIR: &str =
     "/home/p/AI Related/Embedding Models/bge-small-zh-v1.5/Xenova";
-pub const DEFAULT_DSN: &str = "postgresql:///dsh_memory?host=/var/run/postgresql";
+pub const DEFAULT_DSN: &str = "postgresql:///Agent_Memories?host=/var/run/postgresql";
 
 pub fn dsn() -> String {
     std::env::var("KZM_MEMORY_DSN").unwrap_or_else(|_| DEFAULT_DSN.to_string())
