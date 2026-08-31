@@ -16,6 +16,9 @@
 use anyhow::{anyhow, Context};
 use postgres::{Client, NoTls};
 use serde_json::{json, Value};
+// 本文件被 lib 与 6 个 bin 以 #[path] 方式分别编译，各上下文活跃代码不同，
+// 这三个 io trait 在部分上下文只被 dead_code 函数引用——统一豁免
+#[allow(unused_imports)]
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

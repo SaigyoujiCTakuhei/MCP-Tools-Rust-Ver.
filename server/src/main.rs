@@ -254,7 +254,7 @@ fn resolve_config_path() -> PathBuf {
 }
 
 /// 关闭信号 + 排水截止：信号到来后最多再等 10 秒即触发强制退出
-async fn shutdown_then_deadline(mut rx: tokio::sync::watch::Receiver<bool>) {
+async fn shutdown_then_deadline(rx: tokio::sync::watch::Receiver<bool>) {
     shutdown_signal(rx).await;
     tokio::time::sleep(Duration::from_secs(10)).await;
 }
