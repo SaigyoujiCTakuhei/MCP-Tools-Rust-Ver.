@@ -76,7 +76,7 @@ pub fn dashboard_html() -> &'static str {
 <div id="banner">⛔ 服务器已断开 — 请重新启动服务器后刷新页面</div>
 <header>
   <h1>🔮 <span>血月</span> MCP Dashboard</h1>
-  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">Connected · Port 58081</span></div>
+  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">Connected · Port 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
 </header>
 <div class="main">
   <div class="panel-left">
@@ -297,6 +297,20 @@ async function loadLogs() {
 }
 
 // ============ 连接状态（需求一：断开横幅） ============
+
+// 优雅关闭服务器（等价于终端 Ctrl+C）：响应返回后日志流会断开，
+// onerror 自动显示「服务器已断开」横幅；重启服务器后 EventSource 自动重连恢复
+async function shutdownServer() {
+  if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，本页保持打开）')) return;
+  document.getElementById('btnShutdown').disabled = true;
+  document.getElementById('connStatus').textContent = 'Shutting down…';
+  try {
+    await fetch('/api/shutdown', { method: 'POST' });
+    addLogDirect('WARN', '已发送关闭请求，服务器正在优雅退出…');
+  } catch (e) {
+    addLogDirect('WARN', '连接已中断（关闭进行中，属预期）');
+  }
+}
 
 function connectLogStream() {
   const es = new EventSource('/api/logs/stream');

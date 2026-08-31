@@ -96,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("未配置 auth_token，MCP 端点不做鉴权（仅靠回环绑定 + Origin 校验）");
     }
     let tool_timeout = Duration::from_secs(app_config.tools.default_timeout.max(1));
+    // 优雅关闭通道：Ctrl+C / SIGTERM / WebUI「关闭」按钮三路汇聚
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
     // 插件扫描目录：config.tools.discovery_path（可选）+ exe 同目录
     let exe_dir = std::env::current_exe()
         .ok()
@@ -118,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
         lists_changed,
         prompts_dir,
         discovery_dirs.clone(),
+        shutdown_tx,
     );
 
     // ========== 5. 发现并加载插件工具（失败 → ERROR 日志，不阻断启动） ==========
@@ -198,9 +202,10 @@ async fn main() -> anyhow::Result<()> {
     // 浏览器 keep-alive 长连接），可能无限拖延进程退出；因此并行一个
     // 「信号 + 10 秒」截止 future，到点后 main 返回、运行时丢弃剩余任务，
     // 由进程退出强制断开残留连接。
+    let shutdown_rx_server = shutdown_rx.clone();
     let server = tokio::spawn(async move {
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(shutdown_signal(shutdown_rx_server))
             .await
     });
     tokio::select! {
@@ -208,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
             res.context("MCP 服务器任务异常终止")?
                 .context("MCP 服务器运行错误")?;
         }
-        _ = shutdown_then_deadline() => {
+        _ = shutdown_then_deadline(shutdown_rx) => {
             info!("优雅关闭排水超时（仍有长连接未断开），强制退出");
         }
     }
@@ -249,13 +254,13 @@ fn resolve_config_path() -> PathBuf {
 }
 
 /// 关闭信号 + 排水截止：信号到来后最多再等 10 秒即触发强制退出
-async fn shutdown_then_deadline() {
-    shutdown_signal().await;
+async fn shutdown_then_deadline(mut rx: tokio::sync::watch::Receiver<bool>) {
+    shutdown_signal(rx).await;
     tokio::time::sleep(Duration::from_secs(10)).await;
 }
 
-/// 关闭信号：Ctrl+C（双端）+ SIGTERM（仅 Unix）
-async fn shutdown_signal() {
+/// 关闭信号：Ctrl+C（双端）+ SIGTERM（仅 Unix）+ WebUI 关闭按钮（watch 通道）
+async fn shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
     #[cfg(unix)]
     {
         let mut sigterm =
@@ -264,11 +269,15 @@ async fn shutdown_signal() {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
             _ = sigterm.recv() => {},
+            _ = rx.changed() => {},
         }
     }
     #[cfg(not(unix))]
     {
-        tokio::signal::ctrl_c().await.ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = rx.changed() => {},
+        }
     }
     info!("🛑 收到关闭信号，正在优雅退出...");
 }

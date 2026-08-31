@@ -17,7 +17,7 @@
 | 提示词/资源 | 文件驱动（`mcp_data/prompts`、`mcp_data/resources`），热重载并经协议列出（`prompts/list`、`resources/list`） |
 | 输入校验 | JSON Schema（jsonschema crate，注册时预编译） |
 | 鉴权 | 可选 Bearer Token（config / 环境变量） |
-| WebUI | 工具卡片（单击筛选日志）、提示词/资源页签、重载按钮、断连横幅 |
+| WebUI | 工具卡片（单击筛选日志）、提示词/资源页签、重载/扫描新插件按钮、断连横幅、⏻ 关闭按钮（= 终端 Ctrl+C） |
 | 结构 | Cargo workspace：`server`（服务器）+ `tool_kit`（插件契约）+ `tools`（23 个插件二进制） |
 
 ---

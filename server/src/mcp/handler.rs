@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, watch};
 use tracing::{debug, error, info};
 
 use crate::executor::ToolResult;
@@ -198,6 +198,8 @@ pub struct AppState {
     pub prompts_dir: std::path::PathBuf,
     /// 插件扫描目录（rescan API 用）
     pub discovery_dirs: Vec<std::path::PathBuf>,
+    /// 优雅关闭信号：WebUI「关闭」按钮置 true，等价于终端 Ctrl+C
+    pub shutdown: Arc<watch::Sender<bool>>,
 }
 
 impl AppState {
@@ -213,6 +215,7 @@ impl AppState {
         lists_changed: tokio::sync::broadcast::Sender<String>,
         prompts_dir: std::path::PathBuf,
         discovery_dirs: Vec<std::path::PathBuf>,
+        shutdown: Arc<watch::Sender<bool>>,
     ) -> Self {
         Self {
             registry,
@@ -225,6 +228,7 @@ impl AppState {
             lists_changed,
             prompts_dir,
             discovery_dirs,
+            shutdown,
         }
     }
 }

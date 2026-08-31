@@ -100,6 +100,21 @@ pub async fn api_rescan_tools(State(state): State<AppState>) -> Response {
     }
 }
 
+/// POST /api/shutdown — 触发优雅关闭（等价于在终端按下 Ctrl+C；
+/// 在途请求正常完成，浏览器 keep-alive/SSE 长连接最多拖延 10 秒后强制退出）
+pub async fn api_shutdown(State(state): State<AppState>) -> Response {
+    state
+        .logs
+        .log("WARN", "收到 WebUI 关闭请求，开始优雅退出")
+        .await;
+    let _ = state.shutdown.send(true);
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({ "status": "shutting_down" })),
+    )
+        .into_response()
+}
+
 // ==================== 提示词 / 资源（需求四） ====================
 
 /// GET /api/prompts — 提示词列表
@@ -171,6 +186,7 @@ pub fn build_dashboard_router(state: AppState) -> Router {
     Router::new()
         .route("/api/tools", get(api_tools))
         .route("/api/tools/rescan", post(api_rescan_tools))
+        .route("/api/shutdown", post(api_shutdown))
         .route("/api/tools/:name/unload", post(api_unload))
         .route("/api/tools/:name/load", post(api_load))
         .route("/api/tools/:name/reload", post(api_reload_tool))
