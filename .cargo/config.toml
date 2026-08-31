@@ -1,0 +1,5 @@
+# 本地 cargo 便捷别名
+# 根目录是虚拟 workspace（33 个二进制），裸 `cargo run` 无法定目标；
+# 用 `cargo server` 或 `cargo run -p kazemimirin-mcp-server` 启动服务器。
+[alias]
+server = "run -p kazemimirin-mcp-server"

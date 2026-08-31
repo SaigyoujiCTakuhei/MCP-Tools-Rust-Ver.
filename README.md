@@ -176,11 +176,14 @@ initialize 握手；`prompts/list`、`resources/list` 等方法同样可用。ll
 ## 9. 构建与运行
 
 ```bash
-cargo build                # 全 workspace（server + tool_kit + 23 个工具插件）
+cargo build                # 全 workspace（server + tool_kit + 全部插件二进制）
 cargo build --bin kzm-add  # 只编译单个工具插件（热重载日常用）
-cargo run                  # 运行服务器（exe 与 kzm-* 同在 target/debug，自动发现）
+cargo server               # 运行服务器（= cargo run -p kazemimirin-mcp-server 的本地别名）
 cargo test                 # 单元测试
 ```
+
+> workspace 共 33 个二进制，裸 `cargo run` 无法确定目标；`cargo server` 别名
+> 定义在 `.cargo/config.toml`，等价写法：`cargo run -p kazemimirin-mcp-server`。
 
 要求 Rust ≥ 1.85（edition 2024）。Windows / Linux 双端无系统库依赖（reqwest 用 rustls）。
 config.yaml 查找顺序：exe 同目录 → 工作目录。关闭：Ctrl+C / SIGTERM 触发优雅排水，
