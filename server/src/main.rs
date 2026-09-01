@@ -84,6 +84,22 @@ async fn main() -> anyhow::Result<()> {
         0
     });
     info!(prompts = prompts_count, resources = resources_count, "📚 提示词与资源已加载");
+    // 启动信息同步写入 WebUI 日志缓冲（SSE 推送 + /api/logs 留存）
+    logs.log(
+        "INFO",
+        format!(
+            "⚙️ 配置已加载: {}:{}（{}）",
+            app_config.server.host,
+            app_config.server.port,
+            config_path.display()
+        ),
+    )
+    .await;
+    logs.log(
+        "INFO",
+        format!("📚 提示词 {prompts_count} 条、资源 {resources_count} 项已加载"),
+    )
+    .await;
 
     // ========== 4. 构建共享状态 ==========
     // 鉴权：环境变量 MCP_AUTH_TOKEN 优先，其次 config.server.auth_token（空 = 关闭鉴权）
@@ -131,8 +147,10 @@ async fn main() -> anyhow::Result<()> {
     // ========== 5. 发现并加载插件工具（失败 → ERROR 日志，不阻断启动） ==========
     let plugins = mcp::plugins::discover(&discovery_dirs, &logs).await;
     for (binary, decl) in plugins {
-        mcp::plugins::register_plugin(&state, binary, decl);
+        mcp::plugins::register_plugin(&state, binary, decl.clone());
+        logs.log_tool("INFO", &decl.name, "插件工具已加载").await;
     }
+    logs.log("INFO", format!("🔧 插件工具加载完成，共 {} 个", registry.count())).await;
     info!(count = registry.count(), "🔧 插件工具加载完成");
 
     // ========== 6. 构建路由 ==========
@@ -188,6 +206,16 @@ async fn main() -> anyhow::Result<()> {
     info!("Tools: {} | Prompts: {} | Resources: {}",
         registry.count(), prompts_count, resources_count);
     info!("============================================");
+    logs.log(
+        "INFO",
+        format!(
+            "🚀 服务器已启动: http://{addr}（现代 2026-07-28 POST /mcp + Legacy /sse；工具 {} · 提示词 {} · 资源 {}）",
+            registry.count(),
+            prompts_count,
+            resources_count
+        ),
+    )
+    .await;
 
     // 启动后自动打开浏览器（不阻塞服务器启动）
     if app_config.server.auto_open_browser {
