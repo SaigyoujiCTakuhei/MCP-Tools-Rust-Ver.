@@ -234,10 +234,13 @@ async fn main() -> anyhow::Result<()> {
     // 浏览器 keep-alive 长连接），可能无限拖延进程退出；因此并行一个
     // 「信号 + 10 秒」截止 future，到点后 main 返回、运行时丢弃剩余任务，
     // 由进程退出强制断开残留连接。
-    let shutdown_rx_server = shutdown_rx.clone();
+    let (grace_tx, grace_rx) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(async move {
         axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(shutdown_rx_server))
+            .with_graceful_shutdown(async move {
+                let mut grace_rx = grace_rx;
+                let _ = grace_rx.changed().await; // 排水触发：信号 future 发来 true
+            })
             .await
     });
     tokio::select! {
@@ -246,7 +249,7 @@ async fn main() -> anyhow::Result<()> {
                 .context("MCP 服务器运行错误")?;
             info!("👋 服务器已优雅退出");
         }
-        _ = shutdown_then_deadline(shutdown_rx, logs.clone()) => {
+        _ = shutdown_then_deadline(shutdown_rx, logs.clone(), grace_tx) => {
             info!("⚠️ 排水超时（10 秒），服务器已强制退出");
         }
     }
@@ -284,9 +287,15 @@ fn resolve_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("config.yaml"))
 }
 
-/// 关闭信号 + 排水截止：信号到来后最多再等 10 秒即触发强制退出
-async fn shutdown_then_deadline(rx: tokio::sync::watch::Receiver<bool>, logs: Arc<LogSystem>) {
-    shutdown_signal(rx).await;
+/// 关闭信号 + 排水截止：信号到来打一次日志 → 通知 axum 排水 → 最多 10 秒后强制退出
+async fn shutdown_then_deadline(
+    rx: tokio::sync::watch::Receiver<bool>,
+    logs: Arc<LogSystem>,
+    grace: tokio::sync::watch::Sender<bool>,
+) {
+    wait_shutdown_signal(rx).await;
+    info!("🛑 收到关闭信号，正在优雅退出...");
+    let _ = grace.send(true);
     tokio::time::sleep(Duration::from_secs(10)).await;
     // 此时浏览器等客户端的 SSE 连接多半还挂着（正是排水超时的原因），
     // 把强制退出原因经日志通道推给它们，浏览器就能看到退出原因而非无声断连
@@ -294,8 +303,9 @@ async fn shutdown_then_deadline(rx: tokio::sync::watch::Receiver<bool>, logs: Ar
         .await;
 }
 
-/// 关闭信号：Ctrl+C（双端）+ SIGTERM（仅 Unix）+ WebUI 关闭按钮（watch 通道）
-async fn shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
+/// 原始关闭信号等待：Ctrl+C（双端）+ SIGTERM（仅 Unix）+ WebUI 关闭按钮（watch 通道）。
+/// 不打日志——日志由唯一调用方 shutdown_then_deadline 打一次。
+async fn wait_shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
     #[cfg(unix)]
     {
         let mut sigterm =
@@ -314,5 +324,4 @@ async fn shutdown_signal(mut rx: tokio::sync::watch::Receiver<bool>) {
             _ = rx.changed() => {},
         }
     }
-    info!("🛑 收到关闭信号，正在优雅退出...");
 }
