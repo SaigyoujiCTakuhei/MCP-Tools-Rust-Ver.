@@ -34,7 +34,11 @@ async fn main() -> anyhow::Result<()> {
     // 工作目录漂移导致配置被静默忽略（双端行为一致）。
     let config_path = resolve_config_path();
     let used_default_config = !config_path.exists();
-    let app_config = load_config(&config_path).await?;
+    let mut app_config = load_config(&config_path).await?;
+    // 环境变量覆盖（临时/测试场景免改配置文件，防止测试残留污染配置）
+    if let Ok(v) = std::env::var("KZM_AUTO_OPEN_BROWSER") {
+        app_config.server.auto_open_browser = matches!(v.as_str(), "1" | "true" | "TRUE" | "True" | "yes");
+    }
 
     // ========== 2. 日志初始化（读取 logging.level / logging.format） ==========
     let filter = EnvFilter::try_new(&app_config.logging.level).unwrap_or_else(|_| "info".into());
