@@ -115,8 +115,8 @@ let tools = [], prompts = [], resources = [];
 let currentTab = 'tools';
 let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
-let shutdownRequested = false;  // 用户点过「⏻ 关闭」后置位：断流即视为退出完成
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
+let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
 
 function switchTab(tab) {
   currentTab = tab;
@@ -148,7 +148,7 @@ function renderTools() {
     <div class="tool-card ${t.enabled ? '' : 'disabled'} ${currentFilter === t.name ? 'selected' : ''}" onclick="toggleFilter('${t.name}')">
       <div class="tool-name">
         ${t.name}
-        <span class="badge ${t.enabled ? 'badge-on' : 'badge-off'}">${t.enabled ? '运行中' : '已卸载'}</span>
+        <span class="badge ${(connected && t.enabled) ? 'badge-on' : 'badge-off'}">${connected ? (t.enabled ? '运行中' : '已卸载') : '已停止'}</span>
       </div>
       <div class="tool-desc">${t.description}</div>
       <div class="tool-actions" onclick="event.stopPropagation()">
@@ -307,7 +307,6 @@ async function loadLogs() {
 // onerror 自动显示「服务器已断开」横幅；重启服务器后 EventSource 自动重连恢复
 async function shutdownServer() {
   if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，本页保持打开）')) return;
-  shutdownRequested = true;
   document.getElementById('btnShutdown').disabled = true;
   document.getElementById('connStatus').textContent = 'Shutting down…';
   try {
@@ -315,20 +314,18 @@ async function shutdownServer() {
   } catch (e) { /* 关闭进行中连接中断，属预期 */ }
   // 主动释放本页的日志 SSE：服务器排水不再等长连接，可立即完成优雅退出
   if (es) { es.close(); es = null; }
-  addLogDirect('WARN', '已发送关闭请求，等待服务器退出…');
-  // 轮询探活：连接被拒绝（ECONNREFUSED）= 进程已真正退出，此时才显示完成
-  const probe = setInterval(async () => {
-    try {
-      await fetch('/', { cache: 'no-store' });   // 仍在排水：继续等
-    } catch {
-      clearInterval(probe);
-      addLogDirect('INFO', '✅ 服务器已优雅退出');
-      document.getElementById('leftPanel').classList.add('stale');
-      document.getElementById('banner').style.display = 'block';
-      document.getElementById('statusBox').classList.add('disconnected');
-      document.getElementById('connStatus').textContent = 'Disconnected';
-    }
-  }, 500);
+  showDisconnected();
+}
+
+// 断开统一处理：横幅 + 日志「已退出」+ 徽章翻为「已停止」+ 左栏转快照态
+function showDisconnected() {
+  connected = false;
+  if (currentTab === 'tools') renderTools();
+  addLogDirect('INFO', '🔌 服务器已退出');
+  document.getElementById('leftPanel').classList.add('stale');
+  document.getElementById('banner').style.display = 'block';
+  document.getElementById('statusBox').classList.add('disconnected');
+  document.getElementById('connStatus').textContent = 'Disconnected';
 }
 
 function connectLogStream() {
@@ -337,22 +334,18 @@ function connectLogStream() {
     try { appendEntry(JSON.parse(e.data)); } catch {}
   });
   es.onopen = () => {
+    connected = true;
     document.getElementById('banner').style.display = 'none';
     document.getElementById('statusBox').classList.remove('disconnected');
     document.getElementById('leftPanel').classList.remove('stale');
     document.getElementById('btnShutdown').disabled = false;
     document.getElementById('connStatus').textContent = 'Connected · Port 58081';
+    refreshTools();   // 重连后刷新徽章（断开期间曾翻为「已停止」）
   };
   es.onerror = () => {
-    // 服务器关闭 → 日志流断开 → 显示横幅；浏览器会自动重连，服务器恢复后横幅自动消失
-    if (shutdownRequested) {
-      addLogDirect('INFO', '✅ 服务器已退出（本页左栏为断开前快照）');
-      shutdownRequested = false;
-    }
-    document.getElementById('leftPanel').classList.add('stale');
-    document.getElementById('banner').style.display = 'block';
-    document.getElementById('statusBox').classList.add('disconnected');
-    document.getElementById('connStatus').textContent = 'Disconnected';
+    // 服务器关闭 → 日志流断开 → 横幅 + 「已退出」日志 + 徽章「已停止」；
+    // 浏览器会自动重连，服务器恢复后全部自动恢复
+    showDisconnected();
   };
 }
 
