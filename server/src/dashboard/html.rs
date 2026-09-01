@@ -28,6 +28,9 @@ pub fn dashboard_html() -> &'static str {
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .main { display: flex; flex: 1; overflow: hidden; }
   .panel-left { width: 380px; min-width: 300px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  .panel-left.stale { opacity: .5; }
+  .panel-left.stale .btn { pointer-events: none; }
+  .panel-left.stale::after { content: '断开前的快照'; position: sticky; bottom: 0; text-align: center; font-size: 11px; color: var(--red); padding: 4px; background: rgba(248, 81, 73, 0.12); }
   .tabs { display: flex; border-bottom: 1px solid var(--border); }
   .tab { flex: 1; padding: 10px 0; text-align: center; font-size: 13px; cursor: pointer; color: var(--text-muted); border-bottom: 2px solid transparent; user-select: none; }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
@@ -79,7 +82,7 @@ pub fn dashboard_html() -> &'static str {
   <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">Connected · Port 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
 </header>
 <div class="main">
-  <div class="panel-left">
+  <div class="panel-left" id="leftPanel">
     <div class="tabs">
       <div class="tab active" data-tab="tools" onclick="switchTab('tools')">🧰 工具</div>
       <div class="tab" data-tab="prompts" onclick="switchTab('prompts')">💬 提示词</div>
@@ -112,6 +115,8 @@ let tools = [], prompts = [], resources = [];
 let currentTab = 'tools';
 let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
+let shutdownRequested = false;  // 用户点过「⏻ 关闭」后置位：断流即视为退出完成
+let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
 
 function switchTab(tab) {
   currentTab = tab;
@@ -302,28 +307,49 @@ async function loadLogs() {
 // onerror 自动显示「服务器已断开」横幅；重启服务器后 EventSource 自动重连恢复
 async function shutdownServer() {
   if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，本页保持打开）')) return;
+  shutdownRequested = true;
   document.getElementById('btnShutdown').disabled = true;
   document.getElementById('connStatus').textContent = 'Shutting down…';
   try {
     await fetch('/api/shutdown', { method: 'POST' });
-    addLogDirect('WARN', '已发送关闭请求，服务器正在优雅退出…');
-  } catch (e) {
-    addLogDirect('WARN', '连接已中断（关闭进行中，属预期）');
-  }
+  } catch (e) { /* 关闭进行中连接中断，属预期 */ }
+  // 主动释放本页的日志 SSE：服务器排水不再等长连接，可立即完成优雅退出
+  if (es) { es.close(); es = null; }
+  addLogDirect('WARN', '已发送关闭请求，等待服务器退出…');
+  // 轮询探活：连接被拒绝（ECONNREFUSED）= 进程已真正退出，此时才显示完成
+  const probe = setInterval(async () => {
+    try {
+      await fetch('/', { cache: 'no-store' });   // 仍在排水：继续等
+    } catch {
+      clearInterval(probe);
+      addLogDirect('INFO', '✅ 服务器已优雅退出');
+      document.getElementById('leftPanel').classList.add('stale');
+      document.getElementById('banner').style.display = 'block';
+      document.getElementById('statusBox').classList.add('disconnected');
+      document.getElementById('connStatus').textContent = 'Disconnected';
+    }
+  }, 500);
 }
 
 function connectLogStream() {
-  const es = new EventSource('/api/logs/stream');
+  es = new EventSource('/api/logs/stream');
   es.addEventListener('log', (e) => {
     try { appendEntry(JSON.parse(e.data)); } catch {}
   });
   es.onopen = () => {
     document.getElementById('banner').style.display = 'none';
     document.getElementById('statusBox').classList.remove('disconnected');
+    document.getElementById('leftPanel').classList.remove('stale');
+    document.getElementById('btnShutdown').disabled = false;
     document.getElementById('connStatus').textContent = 'Connected · Port 58081';
   };
   es.onerror = () => {
     // 服务器关闭 → 日志流断开 → 显示横幅；浏览器会自动重连，服务器恢复后横幅自动消失
+    if (shutdownRequested) {
+      addLogDirect('INFO', '✅ 服务器已退出（本页左栏为断开前快照）');
+      shutdownRequested = false;
+    }
+    document.getElementById('leftPanel').classList.add('stale');
     document.getElementById('banner').style.display = 'block';
     document.getElementById('statusBox').classList.add('disconnected');
     document.getElementById('connStatus').textContent = 'Disconnected';

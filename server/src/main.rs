@@ -212,13 +212,12 @@ async fn main() -> anyhow::Result<()> {
         res = server => {
             res.context("MCP 服务器任务异常终止")?
                 .context("MCP 服务器运行错误")?;
+            info!("👋 服务器已优雅退出");
         }
-        _ = shutdown_then_deadline(shutdown_rx) => {
-            info!("优雅关闭排水超时（仍有长连接未断开），强制退出");
+        _ = shutdown_then_deadline(shutdown_rx, logs.clone()) => {
+            info!("⚠️ 排水超时（10 秒），服务器已强制退出");
         }
     }
-
-    info!("👋 服务器已关闭");
     Ok(())
 }
 
@@ -254,9 +253,13 @@ fn resolve_config_path() -> PathBuf {
 }
 
 /// 关闭信号 + 排水截止：信号到来后最多再等 10 秒即触发强制退出
-async fn shutdown_then_deadline(rx: tokio::sync::watch::Receiver<bool>) {
+async fn shutdown_then_deadline(rx: tokio::sync::watch::Receiver<bool>, logs: Arc<LogSystem>) {
     shutdown_signal(rx).await;
     tokio::time::sleep(Duration::from_secs(10)).await;
+    // 此时浏览器等客户端的 SSE 连接多半还挂着（正是排水超时的原因），
+    // 把强制退出原因经日志通道推给它们，浏览器就能看到退出原因而非无声断连
+    logs.log("WARN", "⚠️ 优雅排水超时（10 秒），即将强制退出")
+        .await;
 }
 
 /// 关闭信号：Ctrl+C（双端）+ SIGTERM（仅 Unix）+ WebUI 关闭按钮（watch 通道）
