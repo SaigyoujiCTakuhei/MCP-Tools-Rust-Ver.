@@ -91,7 +91,7 @@ pub fn dashboard_html() -> &'static str {
     <div class="panel-header">
       <h2 id="listTitle">工具列表 (<span id="toolCount">0</span>)</h2>
       <div style="display:flex; gap:6px;">
-        <button class="btn" id="btnRescan" onclick="rescanTools()">🔍 扫描新插件</button>
+        <button class="btn" id="btnRescan" onclick="rescanTools()" title="扫描发现目录，登记新增的 kzm-* 插件（已有工具不受影响，无需重启服务器）">🔍 扫描新插件</button>
         <button class="btn" id="btnReload" style="display:none" onclick="reloadCurrent()">⟳ 从磁盘重载</button>
         <button class="btn" onclick="refreshCurrent()">🔄 刷新</button>
       </div>
@@ -152,10 +152,10 @@ function renderTools() {
       </div>
       <div class="tool-desc">${t.description}</div>
       <div class="tool-actions" onclick="event.stopPropagation()">
-        <button class="btn btn-reload" onclick="reloadTool('${t.name}')">⟳ 重载</button>
+        <button class="btn btn-reload" onclick="reloadTool('${t.name}')" title="重新运行磁盘上的插件并读取最新定义（改完代码 cargo build 后点这里即生效），顺带恢复启用">⟳ 重载</button>
         ${t.enabled
-          ? `<button class="btn btn-unload" onclick="unloadTool('${t.name}')">⏏ 卸载</button>`
-          : `<button class="btn btn-load" onclick="loadTool('${t.name}')">↩ 启用</button>`
+          ? `<button class="btn btn-unload" onclick="unloadTool('${t.name}')" title="在内存中禁用该工具（不碰磁盘），调用将被拒绝；点「启用」可恢复">⏏ 卸载</button>`
+          : `<button class="btn btn-load" onclick="loadTool('${t.name}')" title="重新启用该工具（恢复接受调用）">↩ 启用</button>`
         }
       </div>
     </div>
