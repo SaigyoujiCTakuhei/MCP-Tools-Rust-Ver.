@@ -117,6 +117,7 @@ let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
 let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
+let disconnectNotified = false; // 断开态守卫：EventSource 每次重连失败都会触发 onerror，只处理第一次
 
 function switchTab(tab) {
   currentTab = tab;
@@ -317,8 +318,11 @@ async function shutdownServer() {
   showDisconnected();
 }
 
-// 断开统一处理：横幅 + 日志「已退出」+ 徽章翻为「已停止」+ 左栏转快照态
+// 断开统一处理（幂等）：横幅 + 日志「已退出」+ 徽章翻为「已停止」+ 左栏转快照态。
+// EventSource 断线后会每约 5 秒自动重连，重连失败重复触发本函数——守卫保证只生效一次
 function showDisconnected() {
+  if (disconnectNotified) return;
+  disconnectNotified = true;
   connected = false;
   if (currentTab === 'tools') renderTools();
   addLogDirect('INFO', '🔌 服务器已退出');
@@ -334,6 +338,7 @@ function connectLogStream() {
     try { appendEntry(JSON.parse(e.data)); } catch {}
   });
   es.onopen = () => {
+    disconnectNotified = false;
     connected = true;
     document.getElementById('banner').style.display = 'none';
     document.getElementById('statusBox').classList.remove('disconnected');
