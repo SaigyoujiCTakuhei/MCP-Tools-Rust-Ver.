@@ -26,7 +26,7 @@ kzm_tool!(
     ToolDecl {
         name: "calculate".into(),
         title: Some("数组统计".into()),
-        description: "对给定的数字数组执行统计计算（求和、平均、最大、最小）".into(),
+        description: "对给定的数字数组执行统计计算（求和、平均、最大、最小）。注意：内部为 64 位浮点，约 15-16 位有效数字，大整数会静默丢失精度（需精确大数请用 run_command 调 python3）".into(),
         annotations: Some(ToolAnnotations::read_only()),
         category: Some("计算与统计".into()),
         input_schema: json!({
