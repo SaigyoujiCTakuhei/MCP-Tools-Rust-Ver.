@@ -425,7 +425,7 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
     let args_text = serde_json::to_string_pretty(&arguments).unwrap_or_default();
     state
         .logs
-        .log_tool("INFO", tool_name, format!("▶ 输入:\n{}", preview_str(&args_text, 400)))
+        .log_tool("INFO", tool_name, format!("▶ 输入:\n{args_text}"))
         .await;
     let started = std::time::Instant::now();
 
@@ -476,10 +476,9 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
                 "INFO",
                 tool_name,
                 format!(
-                    "✓ 成功（{} 字符，{:.1} 秒）⬅ 输出:\n{}",
+                    "✓ 成功（{} 字符，{:.1} 秒）⬅ 输出:\n{text}",
                     text.len(),
-                    started.elapsed().as_secs_f32(),
-                    preview_str(&text, 800)
+                    started.elapsed().as_secs_f32()
                 ),
             )
             .await;
@@ -505,19 +504,6 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
             "content": [{ "type": "text", "text": msg }],
             "isError": true,
         }))
-    }
-}
-
-// ==================== 日志截断助手 ====================
-
-/// 日志预览：超长截断并注明原始长度（按字符计，中文友好）
-fn preview_str(s: &str, max: usize) -> String {
-    let n = s.chars().count();
-    if n <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max).collect();
-        format!("{cut}…（截断，共 {n} 字符）")
     }
 }
 

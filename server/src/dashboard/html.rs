@@ -88,7 +88,7 @@ pub fn dashboard_html() -> &'static str {
 </div>
 <header>
   <h1>🔮 <span>血月</span> MCP 控制台</h1>
-  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">已连接 · 端口 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
+  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">已连接 · 端口 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（成功后本页显示告别屏，浏览器允许时直接关闭标签页）">⏻ 关闭</button></div>
 </header>
 <div class="main">
   <div class="panel-left" id="leftPanel">
@@ -364,7 +364,7 @@ async function loadLogs() {
 // 优雅关闭服务器（等价于终端 Ctrl+C）：响应返回后日志流会断开，
 // onerror 自动显示「服务器已断开」横幅；重启服务器后 EventSource 自动重连恢复
 async function shutdownServer() {
-  if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，本页保持打开）')) return;
+  if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，成功后本页显示告别屏）')) return;
   document.getElementById('btnShutdown').disabled = true;
   document.getElementById('connStatus').textContent = '正在退出…';
   try {
