@@ -1,6 +1,8 @@
 ---
 name: writing-skills
-description: "Use when creating, editing, or validating agent skills before deployment. Triggers on skill creation requests, skill review, TDD for documentation. Keywords: skill, TDD, documentation, validation, skill-creation, SKILL.md."
+title: "编写技能规范"
+category: "开发流程"
+description: "编写（Anthropic Skills 风格的）技能规范文档。"
 license: MIT
 metadata:
   author: kaze-mimirin

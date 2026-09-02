@@ -1,6 +1,8 @@
 ---
 name: executing-plans
-description: "Use when executing multi-step implementation plans created by writing-plans. Triggers on plan execution, task implementation, checkpoint verification. Keywords: plan, execute, tasks, checkpoint, implementation."
+title: "执行计划"
+category: "开发流程"
+description: "按既定计划逐步执行开发任务。"
 params:
   - name: plan_path_or_content
     type: string

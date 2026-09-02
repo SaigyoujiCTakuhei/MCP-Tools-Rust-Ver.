@@ -1,6 +1,8 @@
 ---
 name: using-git-worktrees
-description: "Use when managing Git worktrees for parallel development. Triggers on worktree creation, branch switching, parallel workspaces. Keywords: Git, worktrees, parallel, branches, switching."
+title: "Git 工作树"
+category: "开发流程"
+description: "使用 Git 工作树并行处理多个任务。"
 license: MIT
 metadata:
   author: kaze-mimirin

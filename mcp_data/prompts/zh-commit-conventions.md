@@ -1,6 +1,8 @@
 ---
 name: zh-commit-conventions
-description: "Use when following Chinese commit conventions. Triggers on commit message creation, changelog updates, version tagging. Keywords: commit, conventions, Chinese, changelog, version."
+title: "中文提交规范"
+category: "规范与文档"
+description: "中文项目的 Git 提交信息规范。"
 params:
   - name: change_type
     type: string

@@ -1,6 +1,8 @@
 ---
 name: softtest-strategy
-description: "Use when defining software testing strategies. Triggers on strategy creation, test planning, coverage analysis. Keywords: strategy, testing, planning, coverage, methods."
+title: "测试策略"
+category: "软件测试"
+description: "制定软件测试策略。"
 params:
   - name: language
     type: string

@@ -1,6 +1,8 @@
 ---
 name: test-driven-development
-description: "Use when implementing features using TDD methodology. Triggers on feature implementation, test creation, red-green-refactor cycles. Keywords: TDD, test-driven, red-green-refactor, testing, implementation."
+title: "测试驱动开发"
+category: "开发流程"
+description: "测试驱动开发：先写测试，再写实现。"
 license: MIT
 metadata:
   author: kaze-mimirin

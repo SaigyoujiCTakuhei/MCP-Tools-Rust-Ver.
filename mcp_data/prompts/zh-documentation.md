@@ -1,6 +1,8 @@
 ---
 name: zh-documentation
-description: "Use when writing Chinese documentation. Triggers on doc creation, API docs, user guides, translations. Keywords: documentation, Chinese, API, guides, translations."
+title: "中文文档写作"
+category: "规范与文档"
+description: "中文技术文档写作规范。"
 params:
   - name: doc_type
     type: string

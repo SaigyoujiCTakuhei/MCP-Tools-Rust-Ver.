@@ -1,6 +1,8 @@
 ---
 name: softtest-feature-request
-description: "Use when analyzing feature requests for soft testing. Triggers on feature analysis, use case creation, test strategy definition. Keywords: feature, request, analysis, use-case, testing."
+title: "功能请求分析"
+category: "软件测试"
+description: "分析软件功能请求的可行性与任务拆解。"
 ---
 
 # 软测功能请求分析

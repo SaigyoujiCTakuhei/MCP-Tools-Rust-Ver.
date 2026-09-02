@@ -1,6 +1,8 @@
 ---
 name: finishing-a-development-branch
-description: "Use when finalizing development branches before merge. Triggers on branch completion, merge preparation, code cleanup. Keywords: branch, merge, finalize, cleanup, release."
+title: "完成开发分支"
+category: "开发流程"
+description: "收尾开发分支：合并、清理与交付前检查。"
 ---
 params:
   - name: current_branch

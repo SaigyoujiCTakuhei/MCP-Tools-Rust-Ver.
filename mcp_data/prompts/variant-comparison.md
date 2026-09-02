@@ -1,6 +1,8 @@
 ---
 name: variant-comparison
-description: "变体对比指南"
+title: "变体对比"
+category: "进化引擎"
+description: "对多个方案变体进行对比评估。"
 ---
 # 变体对比指南
 

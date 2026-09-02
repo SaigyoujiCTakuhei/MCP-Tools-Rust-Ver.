@@ -1,6 +1,8 @@
 ---
 name: verification-before-completion
-description: "Use when verifying task completion before final submission. Triggers on completion verification, quality checks, regression testing. Keywords: verification, completion, quality, regression, checklist."
+title: "完成前验证"
+category: "开发流程"
+description: "宣告完成之前的逐项验证。"
 license: MIT
 metadata:
   author: kaze-mimirin

@@ -1,6 +1,8 @@
 ---
 name: systematic-debugging
-description: "Use when systematically debugging issues. Triggers on error investigation, root cause analysis, regression prevention. Keywords: debug, error, root-cause, investigation, regression."
+title: "系统化调试"
+category: "开发流程"
+description: "系统化排障：定位、假设、验证的完整流程。"
 license: MIT
 metadata:
   author: kaze-mimirin

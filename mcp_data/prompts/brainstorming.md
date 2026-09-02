@@ -1,6 +1,8 @@
 ---
 name: brainstorming
-description: "Use when creating new features, components, or modifying existing behavior before implementation. Triggers on design requests, feature additions, architecture changes. Keywords: design, feature, component, architecture, prototype, specification."
+title: "头脑风暴"
+category: "开发流程"
+description: "在动手实现新功能或修改既有行为之前，先发散探讨设计方案。"
 ---
 Use when creating new features, components, or modifying existing behavior before implementation. Triggers on design requests, feature additions, architecture changes. Keywords: design, feature, component, architecture, prototype, specification.
 

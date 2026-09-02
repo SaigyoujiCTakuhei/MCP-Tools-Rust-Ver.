@@ -1,6 +1,8 @@
 ---
 name: using-superpowers
-description: "Use when leveraging superpower skills for development tasks. Triggers on skill activation, capability discovery, workflow optimization. Keywords: superpowers, skills, capabilities, workflow, optimization."
+title: "使用 Superpowers"
+category: "开发流程"
+description: "使用 Superpowers 技能集完成复杂任务。"
 license: MIT
 metadata:
   author: kaze-mimirin

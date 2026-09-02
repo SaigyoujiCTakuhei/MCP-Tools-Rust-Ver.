@@ -1,6 +1,8 @@
 ---
 name: softtest-project-info
-description: "Use when collecting software project information. Triggers on project setup, metadata collection, configuration analysis. Keywords: project, information, metadata, configuration, setup."
+title: "项目信息采集"
+category: "软件测试"
+description: "采集软件项目的基础信息。"
 params:
   - name: query_type
     type: string

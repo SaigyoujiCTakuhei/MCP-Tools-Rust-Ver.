@@ -31,6 +31,9 @@ pub struct PromptDecl {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// 功能分组（仅 Dashboard 中文界面用；缺省归入「未分类」）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,6 +99,7 @@ impl PromptRegistry {
                 json!({
                     "name": p.name,
                     "title": p.title,
+                    "category": p.category,
                     "description": p.description,
                     "arguments": p.arguments,
                 })
@@ -135,6 +139,8 @@ fn parse_markdown_prompt(path: &Path) -> anyhow::Result<PromptDecl> {
         name: String,
         #[serde(default)]
         title: Option<String>,
+        #[serde(default)]
+        category: Option<String>,
         description: String,
         #[serde(default, alias = "arguments")]
         params: Option<Vec<PromptArgument>>,
@@ -150,6 +156,7 @@ fn parse_markdown_prompt(path: &Path) -> anyhow::Result<PromptDecl> {
     Ok(PromptDecl {
         name: fm.name,
         title: fm.title,
+        category: fm.category,
         description: fm.description,
         arguments: fm.params.filter(|p| !p.is_empty()),
         template,

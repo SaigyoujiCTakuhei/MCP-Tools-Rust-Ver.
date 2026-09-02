@@ -1,6 +1,8 @@
 ---
 name: zh-git-workflow
-description: "Use when managing Chinese Git workflows. Triggers on branch management, merge strategies, release workflows. Keywords: Git, workflow, Chinese, branches, releases."
+title: "国内 Git 工作流"
+category: "规范与文档"
+description: "国内团队的 Git 协作工作流规范。"
 params:
   - name: git_platform
     type: string

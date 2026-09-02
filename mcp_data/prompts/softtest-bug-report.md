@@ -1,6 +1,8 @@
 ---
 name: softtest-bug-report
-description: "Use when generating software bug reports. Triggers on bug documentation, reproduction steps, severity classification. Keywords: bug, report, reproduction, severity, classification."
+title: "缺陷反馈"
+category: "软件测试"
+description: "撰写规范的软件缺陷反馈报告。"
 params:
   - name: project_lang
     type: string

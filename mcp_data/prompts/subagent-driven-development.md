@@ -1,6 +1,8 @@
 ---
 name: subagent-driven-development
-description: "Use when delegating implementation tasks to subagents. Triggers on plan execution, parallel task dispatching, code review delegation. Keywords: subagent, delegation, parallel, execution, review."
+title: "子智能体驱动开发"
+category: "开发流程"
+description: "以子智能体协作方式驱动开发任务。"
 license: MIT
 metadata:
   author: kaze-mimirin

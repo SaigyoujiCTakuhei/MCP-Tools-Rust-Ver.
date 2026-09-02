@@ -1,6 +1,8 @@
 ---
 name: dm-text-game
-description: "Use when running text adventure DM games. Triggers on /dm command, game initialization, scene generation. Keywords: DM, text-adventure, game, roleplay, scenes."
+title: "文字冒险游戏主持"
+category: "角色扮演"
+description: "沉浸式文字冒险游戏主持：剧情推进、状态管理与指令解析。"
 params:
   - name: base
     type: string

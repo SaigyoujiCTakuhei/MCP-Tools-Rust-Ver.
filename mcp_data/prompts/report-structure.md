@@ -1,6 +1,8 @@
 ---
 name: report-structure
-description: "Use when generating execution reports with structured HTML output. Triggers on report generation, documentation output, HTML/CSS templating. Keywords: report, structure, HTML, CSS, template, module, verdict, archive."
+title: "报告结构规范"
+category: "规范与文档"
+description: "执行报告的结构规范（HTML/CSS 模板与样式约定）。"
 ---
 
 # 报告结构规范

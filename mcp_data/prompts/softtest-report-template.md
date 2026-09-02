@@ -1,6 +1,8 @@
 ---
 name: softtest-report-template
-description: "Use when generating software test reports. Triggers on report creation, summary generation, documentation output. Keywords: report, template, summary, documentation, output."
+title: "测试报告模板"
+category: "软件测试"
+description: "生成软件测试报告模板。"
 params:
   - name: report_name
     type: string

@@ -1,6 +1,8 @@
 ---
 name: dispatching-parallel-agents
-description: "Use when dispatching multiple independent tasks to parallel agents. Triggers on parallel execution, concurrent tasks, independent subtasks. Keywords: parallel, concurrent, dispatch, agents, independent."
+title: "并行智能体分派"
+category: "开发流程"
+description: "将任务拆分并并行分派给多个子智能体执行。"
 params:
   - name: task_list
     type: string

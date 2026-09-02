@@ -1,6 +1,8 @@
 ---
 name: softtest-contrib-guide
-description: "Use when creating software contribution guides. Triggers on guide creation, contributor onboarding, workflow documentation. Keywords: contribution, guide, contributor, onboarding, workflow."
+title: "贡献指南"
+category: "软件测试"
+description: "撰写项目贡献指南。"
 params:
   - name: contrib_type
     type: string

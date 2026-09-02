@@ -1,6 +1,8 @@
 ---
 name: mcp-builder
-description: "Use when building new MCP server modules. Triggers on module creation, tool registration, skill documentation. Keywords: MCP, builder, server, modules, tools."
+title: "MCP 服务器构建"
+category: "开发流程"
+description: "构建 MCP 服务器的步骤与规范。"
 ---
 params:
   - name: project_type

@@ -1,6 +1,8 @@
 ---
 name: safety-audit
-description: "安全检查指南"
+title: "安全审计"
+category: "安全"
+description: "对项目或操作进行安全审计与风险检查。"
 ---
 # 安全检查指南
 

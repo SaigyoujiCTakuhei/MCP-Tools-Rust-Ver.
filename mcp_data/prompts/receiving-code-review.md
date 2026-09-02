@@ -1,6 +1,8 @@
 ---
 name: receiving-code-review
-description: "Use when receiving and responding to code reviews. Triggers on review responses, comment resolution, iteration cycles. Keywords: review, response, comments, iteration, feedback."
+title: "接收代码评审"
+category: "代码评审"
+description: "以正确姿态接收并消化代码评审意见。"
 ---
 params:
   - name: review_feedback

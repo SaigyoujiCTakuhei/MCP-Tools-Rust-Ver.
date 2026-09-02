@@ -1,6 +1,8 @@
 ---
 name: zh-code-review
-description: "Use when performing Chinese-style code reviews. Triggers on Chinese codebases, style guide checks, documentation reviews. Keywords: code-review, Chinese, style-guide, documentation, standards."
+title: "中文代码评审"
+category: "代码评审"
+description: "按中文规范执行代码评审（风格、文档与标准检查）。"
 params:
   - name: file_path
     type: string

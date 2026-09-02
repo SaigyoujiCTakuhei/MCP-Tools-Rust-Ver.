@@ -1,6 +1,8 @@
 ---
 name: softtest-changelog
-description: "Use when generating software update changelogs. Triggers on version updates, release notes, change documentation. Keywords: changelog, version, update, release, notes."
+title: "更新日志"
+category: "软件测试"
+description: "撰写软件更新日志（changelog）。"
 params:
   - name: version
     type: string

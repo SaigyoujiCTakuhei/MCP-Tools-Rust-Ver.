@@ -1,6 +1,8 @@
 ---
 name: workflow-runner
-description: "Use when executing workflow pipelines. Triggers on workflow execution, pipeline runs, task orchestration. Keywords: workflow, pipeline, execution, orchestration, automation."
+title: "工作流执行器"
+category: "开发流程"
+description: "按预定义工作流驱动任务执行。"
 license: MIT
 metadata:
   author: kaze-mimirin

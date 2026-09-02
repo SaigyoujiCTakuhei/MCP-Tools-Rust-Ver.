@@ -1,6 +1,8 @@
 ---
 name: writing-plans
-description: "Use when creating multi-step implementation plans before coding. Triggers on feature specs, requirements, architecture decisions. Keywords: plan, implementation, feature, architecture, tasks, code."
+title: "编写计划"
+category: "开发流程"
+description: "编写可执行的开发计划。"
 license: MIT
 metadata:
   author: kaze-mimirin

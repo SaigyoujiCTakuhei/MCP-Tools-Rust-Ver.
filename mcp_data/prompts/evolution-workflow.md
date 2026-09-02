@@ -1,6 +1,8 @@
 ---
 name: evolution-workflow
-description: "进化引擎操作步骤指南"
+title: "进化工作流"
+category: "进化引擎"
+description: "进化引擎的操作步骤指南。"
 ---
 # 进化引擎操作步骤指南
 

@@ -1,6 +1,8 @@
 ---
 name: requesting-code-review
-description: "Use when requesting code reviews from reviewers. Triggers on PR creation, review requests, code quality checks. Keywords: review, PR, code-review, quality, checklist."
+title: "请求代码评审"
+category: "代码评审"
+description: "向他人或智能体发起代码评审的请求规范。"
 ---
 params:
   - name: feature_description

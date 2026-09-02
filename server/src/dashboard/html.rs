@@ -121,7 +121,8 @@ let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
 let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
-let expandedGroups = {};        // 分组展开状态（key=分组名，跨重渲染保留）
+let expandedGroups = {};        // 工具分组展开状态（key=分组名，跨重渲染保留）
+let promptGroupsOpen = {};      // 提示词分组展开状态
 let disconnectNotified = false; // 断开态守卫：EventSource 每次重连失败都会触发 onerror，只处理第一次
 
 function switchTab(tab) {
@@ -242,15 +243,35 @@ async function refreshPrompts() {
     const res = await fetch('/api/prompts');
     prompts = await res.json();
     document.getElementById('listTitle').textContent = `提示词 (${prompts.length})`;
-    document.getElementById('listArea').innerHTML = prompts.length === 0
+    const groups = {};
+    for (const p of prompts) {
+      const g = p.category || '未分类';
+      (groups[g] = groups[g] || []).push(p);
+    }
+    const names = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'zh'));
+    document.getElementById('listArea').innerHTML = names.length === 0
       ? '<div class="empty-state">无提示词（mcp_data/prompts 下放 .json / .md 文件后点「从磁盘重载」）</div>'
-      : prompts.map(p => `
-        <div class="entry-card">
-          <div class="name">💬 ${p.name}</div>
-          <div class="desc">${p.description || ''}</div>
-          ${p.arguments ? `<div class="meta">参数: ${p.arguments.map(a => a.name + (a.required ? '*' : '')).join(', ')}</div>` : ''}
-        </div>`).join('');
+      : names.map(g => {
+          const open = !!promptGroupsOpen[g];
+          return `
+            <div class="group-header" onclick="togglePromptGroup('${g}')">
+              <span class="arrow">${open ? '▼' : '▶'}</span> ${g}
+              <span class="group-count">(${groups[g].length})</span>
+            </div>
+            ${open ? groups[g].map(p => `
+              <div class="entry-card">
+                <div class="name">💬 ${p.title || p.name} <span style="color:var(--text-muted);font-size:11px">${p.name}</span></div>
+                <div class="desc">${p.description || ''}</div>
+                ${p.arguments ? `<div class="meta">参数: ${p.arguments.map(a => a.name + (a.required ? '*' : '')).join(', ')}</div>` : ''}
+              </div>`).join('') : ''}
+          `;
+        }).join('');
   } catch (e) { addLogDirect('ERROR', '刷新提示词失败: ' + e.message); }
+}
+
+function togglePromptGroup(g) {
+  promptGroupsOpen[g] = !promptGroupsOpen[g];
+  refreshPrompts();
 }
 
 async function refreshResources() {

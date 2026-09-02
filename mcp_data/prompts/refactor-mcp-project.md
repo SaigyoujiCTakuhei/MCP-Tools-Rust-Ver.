@@ -1,6 +1,8 @@
 ---
 name: refactor-mcp-project
-description: "Use when refactoring MCP server projects. Triggers on code organization, module restructuring, import path updates. Keywords: refactor, MCP, server, modules, imports."
+title: "MCP 项目重构"
+category: "开发流程"
+description: "MCP 项目重构的流程与检查清单。"
 params:
   - name: source_path
     type: string

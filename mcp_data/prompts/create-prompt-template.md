@@ -1,6 +1,8 @@
 ---
 name: create-prompt-template
-description: "Use when creating new MCP prompt templates. Triggers on template creation, parameter definition, frontmatter validation. Keywords: prompt, template, MCP, parameters, frontmatter."
+title: "创建提示词模板"
+category: "提示词工程"
+description: "创建结构化的提示词模板。"
 params:
   - name: prompt_name
     type: string

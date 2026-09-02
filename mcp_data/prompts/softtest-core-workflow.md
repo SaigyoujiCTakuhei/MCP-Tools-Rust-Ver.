@@ -1,6 +1,8 @@
 ---
 name: softtest-core-workflow
-description: "Use when executing multi-stage test analysis pipelines. Triggers on pipeline runs, repository analysis, coverage reports. Keywords: pipeline, analysis, repository, coverage, testing."
+title: "核心工作流分析"
+category: "软件测试"
+description: "分析软件项目的核心工作流。"
 params:
   - name: repo_source
     type: string

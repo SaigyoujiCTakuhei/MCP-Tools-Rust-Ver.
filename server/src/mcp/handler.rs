@@ -454,7 +454,19 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
 // ==================== prompts / resources（需求四） ====================
 
 async fn prompts_list(state: &AppState) -> Result<Value, RpcError> {
-    let prompts = state.prompts.list().await;
+    // category 是 Dashboard 界面专用概念，不进 MCP 协议面（与 tools/list 口径一致）
+    let prompts: Vec<Value> = state
+        .prompts
+        .list()
+        .await
+        .into_iter()
+        .map(|mut p| {
+            if let Some(obj) = p.as_object_mut() {
+                obj.remove("category");
+            }
+            p
+        })
+        .collect();
     Ok(json!({ "prompts": prompts }))
 }
 
