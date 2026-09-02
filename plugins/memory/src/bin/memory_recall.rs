@@ -77,6 +77,7 @@ kzm_tool!(
         title: Some("检索长期记忆".into()),
         description: "按语义相似度检索长期记忆库（本地 PostgreSQL + pgvector，HNSW 索引）。".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

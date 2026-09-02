@@ -20,6 +20,7 @@ kzm_tool!(
         title: Some("当前时间".into()),
         description: "获取当前时间（HH:MM:SS 格式）和 Unix 时间戳".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("系统与命令".into()),
         input_schema: json!({ "type": "object", "properties": {} }),
     },
     run

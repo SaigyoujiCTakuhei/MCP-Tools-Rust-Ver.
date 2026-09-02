@@ -62,6 +62,7 @@ kzm_tool!(
         title: Some("网络搜索".into()),
         description: "通过网络搜索查询关键词（使用 DuckDuckGo 零点击 API）".into(),
         annotations: Some(ToolAnnotations::open_world_read_only()),
+        category: Some("网络".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

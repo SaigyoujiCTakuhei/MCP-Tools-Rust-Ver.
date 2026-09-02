@@ -17,6 +17,7 @@ kzm_tool!(
         title: Some("创建目录".into()),
         description: "创建目录（递归创建父目录）".into(),
         annotations: Some(ToolAnnotations::writes()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

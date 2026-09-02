@@ -51,6 +51,7 @@ kzm_tool!(
         title: Some("存入长期记忆".into()),
         description: "把一条记忆（事实/偏好/事件/日志）存入长期记忆库（本地 PostgreSQL + pgvector），语义可检索。".into(),
         annotations: Some(ToolAnnotations::writes()),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

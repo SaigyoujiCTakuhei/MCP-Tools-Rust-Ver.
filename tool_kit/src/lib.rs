@@ -16,6 +16,9 @@ pub struct ToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub description: String,
+    /// 功能分组（仅 Dashboard 中文界面用，不进 MCP 协议；缺省归入「未分类」）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
     pub input_schema: Value,

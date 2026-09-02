@@ -26,6 +26,7 @@ kzm_tool!(
         title: Some("写入文件".into()),
         description: "将内容写入指定文件（覆盖模式）".into(),
         annotations: Some(ToolAnnotations::destructive()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

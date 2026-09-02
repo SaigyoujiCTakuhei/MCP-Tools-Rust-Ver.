@@ -35,6 +35,7 @@ kzm_tool!(
         title: Some("文件名搜索".into()),
         description: "在目录中搜索匹配通配符模式的文件名".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("搜索".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

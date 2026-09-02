@@ -149,6 +149,7 @@ kzm_tool!(
             idempotent_hint: Some(true),
             open_world_hint: Some(false),
         }),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

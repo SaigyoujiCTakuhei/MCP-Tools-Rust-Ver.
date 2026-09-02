@@ -57,6 +57,7 @@ kzm_tool!(
         title: Some("执行 Shell 命令".into()),
         description: "执行系统 Shell 命令（Windows: PowerShell，Linux/macOS: bash）".into(),
         annotations: Some(ToolAnnotations::destructive()),
+        category: Some("系统与命令".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

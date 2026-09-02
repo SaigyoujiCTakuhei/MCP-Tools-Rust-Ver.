@@ -30,6 +30,7 @@ kzm_tool!(
         title: Some("文件元数据".into()),
         description: "获取文件的元数据信息（大小、类型、修改时间）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

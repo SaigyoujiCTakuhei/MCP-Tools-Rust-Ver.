@@ -20,6 +20,7 @@ kzm_tool!(
         title: Some("系统信息".into()),
         description: "获取当前系统信息（操作系统、架构、主机名、工作目录等）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("系统与命令".into()),
         input_schema: json!({ "type": "object", "properties": {} }),
     },
     run

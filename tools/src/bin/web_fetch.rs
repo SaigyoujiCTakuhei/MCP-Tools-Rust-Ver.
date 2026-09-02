@@ -59,6 +59,7 @@ kzm_tool!(
         title: Some("网页抓取".into()),
         description: "抓取指定 URL 的网页内容".into(),
         annotations: Some(ToolAnnotations::open_world()),
+        category: Some("网络".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

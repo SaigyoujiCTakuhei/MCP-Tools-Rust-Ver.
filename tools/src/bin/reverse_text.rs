@@ -15,6 +15,7 @@ kzm_tool!(
         title: Some("文本反转".into()),
         description: "反转输入的文本字符串".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("文本处理".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

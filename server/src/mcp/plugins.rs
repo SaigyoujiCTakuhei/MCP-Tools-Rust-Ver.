@@ -220,6 +220,7 @@ pub fn register_plugin(state: &AppState, binary: PathBuf, decl: ToolDecl) {
         title: decl.title,
         description: decl.description,
         input_schema: decl.input_schema,
+        category: decl.category,
         annotations: decl.annotations.map(|a| ToolAnnotations {
             read_only_hint: a.read_only_hint,
             destructive_hint: a.destructive_hint,

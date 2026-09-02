@@ -9,7 +9,7 @@ pub fn dashboard_html() -> &'static str {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP Dashboard — 风见血月</title>
+<title>MCP 控制台 — 风见血月</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
@@ -46,6 +46,10 @@ pub fn dashboard_html() -> &'static str {
   .btn-reload { border-color: var(--accent); color: var(--accent); }
   .btn-reload:hover { background: rgba(88, 166, 255, 0.15); }
   .tool-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .group-header { display: flex; align-items: center; gap: 6px; padding: 8px 6px; margin-bottom: 4px; font-size: 13px; font-weight: 600; cursor: pointer; user-select: none; border-radius: 6px; }
+  .group-header:hover { background: rgba(88, 166, 255, 0.08); color: var(--accent); }
+  .group-header .arrow { font-size: 10px; color: var(--text-muted); width: 12px; }
+  .group-header .group-count { color: var(--text-muted); font-weight: 400; font-size: 12px; }
   .tool-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 8px; transition: all 0.2s; cursor: pointer; }
   .tool-card:hover { border-color: var(--accent); }
   .tool-card.selected { border-color: var(--accent); background: rgba(88, 166, 255, 0.08); }
@@ -78,8 +82,8 @@ pub fn dashboard_html() -> &'static str {
 <body>
 <div id="banner">⛔ 服务器已断开 — 请重新启动服务器后刷新页面</div>
 <header>
-  <h1>🔮 <span>血月</span> MCP Dashboard</h1>
-  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">Connected · Port 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
+  <h1>🔮 <span>血月</span> MCP 控制台</h1>
+  <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">已连接 · 端口 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
 </header>
 <div class="main">
   <div class="panel-left" id="leftPanel">
@@ -117,6 +121,7 @@ let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
 let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
+let expandedGroups = {};        // 分组展开状态（key=分组名，跨重渲染保留）
 let disconnectNotified = false; // 断开态守卫：EventSource 每次重连失败都会触发 onerror，只处理第一次
 
 function switchTab(tab) {
@@ -141,11 +146,8 @@ async function refreshTools() {
   } catch (e) { addLogDirect('ERROR', '刷新工具列表失败: ' + e.message); }
 }
 
-function renderTools() {
-  document.getElementById('listTitle').innerHTML = '工具列表 (<span id="toolCount">' + tools.length + '</span>)';
-  const el = document.getElementById('listArea');
-  if (tools.length === 0) { el.innerHTML = '<div class="empty-state">没有工具（检查 kzm-* 插件是否已构建）</div>'; return; }
-  el.innerHTML = tools.map(t => `
+function cardHtml(t) {
+  return `
     <div class="tool-card ${t.enabled ? '' : 'disabled'} ${currentFilter === t.name ? 'selected' : ''}" onclick="toggleFilter('${t.name}')">
       <div class="tool-name">
         ${t.name}
@@ -160,7 +162,35 @@ function renderTools() {
         }
       </div>
     </div>
-  `).join('');
+  `;
+}
+
+// 按功能分组渲染（category 由各插件 decl 声明），单击组标题展开/收起
+function renderTools() {
+  document.getElementById('listTitle').innerHTML = '工具列表 (<span id="toolCount">' + tools.length + '</span>)';
+  const el = document.getElementById('listArea');
+  if (tools.length === 0) { el.innerHTML = '<div class="empty-state">没有工具（检查 kzm-* 插件是否已构建）</div>'; return; }
+  const groups = {};
+  for (const t of tools) {
+    const g = t.category || '未分类';
+    (groups[g] = groups[g] || []).push(t);
+  }
+  const names = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'zh'));
+  el.innerHTML = names.map(g => {
+    const open = !!expandedGroups[g];
+    return `
+      <div class="group-header" onclick="toggleGroup('${g}')">
+        <span class="arrow">${open ? '▼' : '▶'}</span> ${g}
+        <span class="group-count">(${groups[g].length})</span>
+      </div>
+      ${open ? groups[g].map(cardHtml).join('') : ''}
+    `;
+  }).join('');
+}
+
+function toggleGroup(g) {
+  expandedGroups[g] = !expandedGroups[g];
+  renderTools();
 }
 
 async function unloadTool(name) {
@@ -269,8 +299,9 @@ function appendLogDom(entry) {
   const area = document.getElementById('logArea');
   document.getElementById('logEmpty')?.remove();
   const div = document.createElement('div');
+  const LEVEL_ZH = { INFO: '信息', WARN: '警告', ERROR: '错误', DEBUG: '调试' };
   div.className = 'log-entry';
-  div.innerHTML = `<span class="log-time">${entry.timestamp}</span><span class="log-level ${entry.level}">${entry.level}</span>${entry.tool ? `<span class="log-tool">${entry.tool}</span>` : ''}<span class="log-msg">${escapeHtml(entry.message)}</span>`;
+  div.innerHTML = `<span class="log-time">${entry.timestamp}</span><span class="log-level ${entry.level}">${LEVEL_ZH[entry.level] || entry.level}</span>${entry.tool ? `<span class="log-tool">${entry.tool}</span>` : ''}<span class="log-msg">${escapeHtml(entry.message)}</span>`;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
 }
@@ -309,7 +340,7 @@ async function loadLogs() {
 async function shutdownServer() {
   if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，本页保持打开）')) return;
   document.getElementById('btnShutdown').disabled = true;
-  document.getElementById('connStatus').textContent = 'Shutting down…';
+  document.getElementById('connStatus').textContent = '正在退出…';
   try {
     await fetch('/api/shutdown', { method: 'POST' });
   } catch (e) { /* 关闭进行中连接中断，属预期 */ }
@@ -329,7 +360,7 @@ function showDisconnected() {
   document.getElementById('leftPanel').classList.add('stale');
   document.getElementById('banner').style.display = 'block';
   document.getElementById('statusBox').classList.add('disconnected');
-  document.getElementById('connStatus').textContent = 'Disconnected';
+  document.getElementById('connStatus').textContent = '已断开';
 }
 
 function connectLogStream() {
@@ -344,7 +375,7 @@ function connectLogStream() {
     document.getElementById('statusBox').classList.remove('disconnected');
     document.getElementById('leftPanel').classList.remove('stale');
     document.getElementById('btnShutdown').disabled = false;
-    document.getElementById('connStatus').textContent = 'Connected · Port 58081';
+    document.getElementById('connStatus').textContent = '已连接 · 端口 58081';
     refreshTools();   // 重连后刷新徽章（断开期间曾翻为「已停止」）
   };
   es.onerror = () => {

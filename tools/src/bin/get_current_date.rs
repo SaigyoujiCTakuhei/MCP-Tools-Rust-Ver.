@@ -15,6 +15,7 @@ kzm_tool!(
         title: Some("当前日期".into()),
         description: "获取当前日期（YYYY-MM-DD 格式）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("系统与命令".into()),
         input_schema: json!({ "type": "object", "properties": {} }),
     },
     run

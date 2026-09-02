@@ -43,6 +43,7 @@ kzm_tool!(
         title: Some("读取网络 PDF".into()),
         description: "Extract text content from a PDF file hosted at a URL (downloads to memory).".into(),
         annotations: Some(ToolAnnotations::open_world_read_only()),
+        category: Some("PDF 文档".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

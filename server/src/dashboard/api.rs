@@ -28,6 +28,7 @@ pub async fn api_tools(State(state): State<AppState>) -> Json<Vec<serde_json::Va
                 "description": def.description,
                 "enabled": def.enabled,
                 "source": format!("{:?}", def.source),
+                "category": def.category,
                 "inputSchema": def.input_schema,
             })
         })

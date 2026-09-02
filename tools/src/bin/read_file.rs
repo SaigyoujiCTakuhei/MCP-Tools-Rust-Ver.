@@ -21,6 +21,7 @@ kzm_tool!(
         title: Some("读取文件".into()),
         description: "读取指定文件的内容".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -28,6 +28,7 @@ kzm_tool!(
         title: Some("数组统计".into()),
         description: "对给定的数字数组执行统计计算（求和、平均、最大、最小）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("计算与统计".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -36,6 +36,7 @@ kzm_tool!(
         title: Some("行数统计".into()),
         description: "统计指定文件的代码行数（空行、注释行、代码行）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("计算与统计".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

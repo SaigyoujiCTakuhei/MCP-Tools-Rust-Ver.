@@ -226,6 +226,7 @@ kzm_tool!(
         title: Some("批量导入记忆文件".into()),
         description: "把 dsh 记忆 Markdown（MEMORY.md / 日志 / 反思 / 总结）分块、向量化并导入长期记忆库（增量幂等）。".into(),
         annotations: Some(ToolAnnotations::writes()),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

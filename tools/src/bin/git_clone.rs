@@ -27,6 +27,7 @@ kzm_tool!(
         title: Some("克隆仓库".into()),
         description: "克隆 Git 仓库到本地".into(),
         annotations: Some(ToolAnnotations::writes()),
+        category: Some("Git".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

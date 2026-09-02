@@ -53,6 +53,7 @@ kzm_tool!(
         title: Some("遗忘记忆".into()),
         description: "永久删除一条长期记忆条目（按 id，不可恢复）。".into(),
         annotations: Some(ToolAnnotations::destructive()),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

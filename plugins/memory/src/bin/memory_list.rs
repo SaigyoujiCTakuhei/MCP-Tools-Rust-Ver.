@@ -67,6 +67,7 @@ kzm_tool!(
         title: Some("浏览长期记忆".into()),
         description: "按时间倒序浏览长期记忆库条目（预览前 200 字符）。".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("思考与记忆".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

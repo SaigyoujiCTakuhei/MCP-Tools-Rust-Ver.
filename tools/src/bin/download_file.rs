@@ -53,6 +53,7 @@ kzm_tool!(
         title: Some("下载文件".into()),
         description: "从指定 URL 下载文件到本地路径".into(),
         annotations: Some(ToolAnnotations::writes()),
+        category: Some("网络".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

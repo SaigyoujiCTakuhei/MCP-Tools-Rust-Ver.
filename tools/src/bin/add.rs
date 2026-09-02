@@ -14,6 +14,7 @@ kzm_tool!(
         title: Some("加法计算".into()),
         description: "执行加法运算，返回 a + b 的结果".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("计算与统计".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

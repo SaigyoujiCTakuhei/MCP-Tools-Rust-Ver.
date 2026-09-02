@@ -24,6 +24,7 @@ kzm_tool!(
         title: Some("目录列表".into()),
         description: "列出指定目录下的所有文件和子目录".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

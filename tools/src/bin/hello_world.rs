@@ -12,6 +12,7 @@ kzm_tool!(
         title: Some("问候语".into()),
         description: "返回一条简单的问候消息（测试用基础工具）".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("文本处理".into()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {

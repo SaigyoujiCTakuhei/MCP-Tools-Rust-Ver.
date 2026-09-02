@@ -39,6 +39,7 @@ kzm_tool!(
         title: Some("文件内容搜索".into()),
         description: "在指定文件中使用正则表达式搜索匹配的行".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("搜索".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

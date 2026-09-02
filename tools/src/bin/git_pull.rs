@@ -25,6 +25,7 @@ kzm_tool!(
         title: Some("拉取仓库更新".into()),
         description: "在指定目录执行 git pull 拉取最新代码".into(),
         annotations: Some(ToolAnnotations::destructive()),
+        category: Some("Git".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

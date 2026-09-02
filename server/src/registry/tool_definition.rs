@@ -10,6 +10,9 @@ pub struct ToolDefinition {
     pub description: String,
     /// JSON Schema 入参定义
     pub input_schema: serde_json::Value,
+    /// 功能分组（仅 Dashboard 中文界面用，不进 MCP 协议）
+    #[serde(default)]
+    pub category: Option<String>,
     /// 人类可读标题
     pub title: Option<String>,
     /// MCP 协议注解

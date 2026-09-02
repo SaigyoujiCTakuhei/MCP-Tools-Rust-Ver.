@@ -17,6 +17,7 @@ kzm_tool!(
         title: Some("删除文件".into()),
         description: "删除指定文件".into(),
         annotations: Some(ToolAnnotations::destructive()),
+        category: Some("文件与目录".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

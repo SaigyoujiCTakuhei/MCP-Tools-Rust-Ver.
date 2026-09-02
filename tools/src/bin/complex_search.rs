@@ -70,6 +70,7 @@ kzm_tool!(
         title: Some("递归文本搜索".into()),
         description: "在目录下递归搜索包含指定文本内容的文件".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("搜索".into()),
         input_schema: json!({
             "type": "object",
             "properties": {

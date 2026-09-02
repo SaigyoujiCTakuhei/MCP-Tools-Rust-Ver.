@@ -23,6 +23,7 @@ kzm_tool!(
         title: Some("读取本地 PDF".into()),
         description: "Read text content from a local PDF file. Supports path traversal within local filesystem.".into(),
         annotations: Some(ToolAnnotations::read_only()),
+        category: Some("PDF 文档".into()),
         input_schema: json!({
             "type": "object",
             "properties": {
