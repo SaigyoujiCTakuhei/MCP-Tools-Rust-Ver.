@@ -64,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(ToolRegistry::new());
     let logs = Arc::new(LogSystem::new());
     let (lists_changed, _) = broadcast::channel::<String>(64);
+    let legacy_sessions = Arc::new(mcp::handler::LegacySessions::new());
 
     let prompts_dir = config_path
         .parent()
@@ -142,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         prompts_dir,
         discovery_dirs.clone(),
         shutdown_tx,
+        legacy_sessions,
     );
 
     // ========== 5. 发现并加载插件工具（失败 → ERROR 日志，不阻断启动） ==========

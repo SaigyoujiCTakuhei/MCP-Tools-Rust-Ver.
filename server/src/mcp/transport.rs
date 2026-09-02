@@ -39,12 +39,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tracing::warn;
 
 use crate::mcp::handler::{
     error_envelope, finalize_result, handle_legacy_rpc, handle_rpc, result_envelope, AppState,
-    RequestMeta, RpcError, ERR_HEADER_MISMATCH, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND,
-    ERR_PARSE_ERROR, ERR_UNSUPPORTED_PROTOCOL_VERSION, META_SUBSCRIPTION_ID,
+    LegacySessions, RequestMeta, RpcError, ERR_HEADER_MISMATCH, ERR_INVALID_REQUEST,
+    ERR_METHOD_NOT_FOUND, ERR_PARSE_ERROR, ERR_UNSUPPORTED_PROTOCOL_VERSION, META_SUBSCRIPTION_ID,
     SUPPORTED_PROTOCOL_VERSIONS,
 };
 use crate::registry::tool_registry::ToolChangeEvent;
@@ -297,7 +298,8 @@ async fn handle_subscriptions_listen(state: &AppState, id: &Value, params: Value
 // ==================== Legacy：GET /sse — 旧传输通道 ====================
 
 /// 2024-11-05 HTTP+SSE：打开 SSE 长流，首条 `endpoint` 事件的 data 为
-/// 纯 URI 字符串（旧实现曾错误地发 JSON 对象）。工具/提示词/资源列表变更经此流推送。
+/// 纯 URI 字符串。该会话后续所有 JSON-RPC 响应都经此流以 `message` 事件送回
+/// （官方 SDK 忽略 POST 响应体）；工具/提示词/资源列表变更也在此推送。
 async fn handle_legacy_sse(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(resp) = check_access(&state, &headers) {
         return resp;
@@ -305,14 +307,34 @@ async fn handle_legacy_sse(State(state): State<AppState>, headers: HeaderMap) ->
 
     let session_id = next_session_id();
     let endpoint = format!("/message?sessionId={session_id}");
-    let mut rx = state.registry.notify_rx();
-    let mut lists_rx = state.lists_changed.subscribe();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(64);
+    state.legacy_sessions.insert(session_id.clone(), tx);
+    let mut rx_tools = state.registry.notify_rx();
+    let mut rx_lists = state.lists_changed.subscribe();
 
+    let sessions = state.legacy_sessions.clone();
     let stream = async_stream::stream! {
+        // 守卫：流被丢弃（客户端断开）时注销会话
+        struct SessionDropGuard {
+            id: String,
+            sessions: Arc<LegacySessions>,
+        }
+        impl Drop for SessionDropGuard {
+            fn drop(&mut self) {
+                self.sessions.remove(&self.id);
+            }
+        }
+        let _guard = SessionDropGuard { id: session_id.clone(), sessions };
+
         yield Ok::<Event, Infallible>(Event::default().event("endpoint").data(endpoint));
         loop {
             let notification = tokio::select! {
-                change = rx.recv() => match change {
+                resp = rx.recv() => match resp {
+                    // 该会话的 JSON-RPC 响应（POST /message 提交后路由到此）
+                    Some(body) => Some(body),
+                    None => break,
+                },
+                change = rx_tools.recv() => match change {
                     Ok(ToolChangeEvent::Registered { .. }) | Ok(ToolChangeEvent::Toggled { .. }) => {
                         Some(json!({
                             "jsonrpc": "2.0",
@@ -322,7 +344,7 @@ async fn handle_legacy_sse(State(state): State<AppState>, headers: HeaderMap) ->
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
-                list = lists_rx.recv() => match list {
+                list = rx_lists.recv() => match list {
                     Ok(kind) if kind == "prompts" => {
                         Some(json!({ "jsonrpc": "2.0", "method": "notifications/prompts/list_changed" }))
                     }
@@ -348,14 +370,15 @@ async fn handle_legacy_sse(State(state): State<AppState>, headers: HeaderMap) ->
 #[derive(Deserialize)]
 struct LegacyQuery {
     #[serde(rename = "sessionId")]
-    _session_id: Option<String>,
+    session_id: Option<String>,
 }
 
-/// 2024-11-05 语义：initialize 握手、无 _meta、结果不带 resultType/_meta。
-/// sessionId 仅作传输寻址记录，服务器无状态、不校验其有效性。
+/// 2024-11-05 语义：POST 只负责提交——处理 JSON-RPC 后把响应体经该会话的
+/// /sse 流送回，本端点按规范回 `202 Accepted`（官方 SDK 忽略 POST 响应体）。
+/// 未知/已断开的 sessionId → 404（客户端应重新 GET /sse 建立会话）。
 async fn handle_legacy_message(
     State(state): State<AppState>,
-    Query(_q): Query<LegacyQuery>,
+    Query(q): Query<LegacyQuery>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -401,9 +424,21 @@ async fn handle_legacy_message(
     };
 
     let params = obj.get("params").cloned().unwrap_or_else(|| json!({}));
-    match handle_legacy_rpc(&state, &method, params).await {
-        Ok(result) => json_response(StatusCode::OK, result_envelope(&id, result)),
-        Err(e) => json_response(StatusCode::OK, error_envelope(Some(&id), &e)),
+    let response = match handle_legacy_rpc(&state, &method, params).await {
+        Ok(result) => result_envelope(&id, result),
+        Err(e) => error_envelope(Some(&id), &e),
+    };
+
+    // 响应经会话的 SSE 流送回；本端点按规范回 202 无 body
+    let session = q.session_id.clone().unwrap_or_default();
+    if state.legacy_sessions.try_send_response(&session, response) {
+        StatusCode::ACCEPTED.into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            format!("unknown or expired session '{session}'"),
+        )
+            .into_response()
     }
 }
 

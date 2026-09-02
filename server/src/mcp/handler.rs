@@ -12,11 +12,12 @@
 /// - 订阅唯一入口为 subscriptions/listen（SSE 长流，实现在 transport.rs）
 /// - 另提供 legacy（2024-11-05 HTTP+SSE）语义分发，供 transport.rs 的 /sse、/message 使用
 use chrono::Local;
+use dashmap::DashMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, RwLock, watch};
+use tokio::sync::{broadcast, mpsc, RwLock, watch};
 use tracing::{debug, error, info};
 
 use crate::executor::ToolResult;
@@ -176,6 +177,37 @@ impl LogSystem {
     }
 }
 
+// ==================== Legacy 会话表（2024-11-05 响应回程） ====================
+
+/// 2024-11-05 HTTP+SSE 传输：POST /message 只负责提交（回 202），
+/// JSON-RPC 响应必须经由该会话的 SSE 流送回——官方 SDK 忽略 POST 响应体。
+#[derive(Default)]
+pub struct LegacySessions {
+    sessions: DashMap<String, mpsc::Sender<Value>>,
+}
+
+impl LegacySessions {
+    pub fn new() -> Self {
+        Self { sessions: DashMap::new() }
+    }
+
+    pub fn insert(&self, id: String, tx: mpsc::Sender<Value>) {
+        self.sessions.insert(id, tx);
+    }
+
+    pub fn remove(&self, id: &str) {
+        self.sessions.remove(id);
+    }
+
+    /// 把 JSON-RPC 响应推给会话的 SSE 流；会话不存在/已断开/队列满 → false（POST 侧回 404）
+    pub fn try_send_response(&self, session: &str, body: Value) -> bool {
+        self.sessions
+            .get(session)
+            .map(|tx| tx.try_send(body).is_ok())
+            .unwrap_or(false)
+    }
+}
+
 // ==================== 应用状态 ====================
 
 #[derive(Clone)]
@@ -200,6 +232,8 @@ pub struct AppState {
     pub discovery_dirs: Vec<std::path::PathBuf>,
     /// 优雅关闭信号：WebUI「关闭」按钮置 true，等价于终端 Ctrl+C
     pub shutdown: Arc<watch::Sender<bool>>,
+    /// Legacy（2024-11-05）会话表：sessionId → 响应回传通道
+    pub legacy_sessions: Arc<LegacySessions>,
 }
 
 impl AppState {
@@ -216,6 +250,7 @@ impl AppState {
         prompts_dir: std::path::PathBuf,
         discovery_dirs: Vec<std::path::PathBuf>,
         shutdown: Arc<watch::Sender<bool>>,
+        legacy_sessions: Arc<LegacySessions>,
     ) -> Self {
         Self {
             registry,
@@ -229,6 +264,7 @@ impl AppState {
             prompts_dir,
             discovery_dirs,
             shutdown,
+            legacy_sessions,
         }
     }
 }
