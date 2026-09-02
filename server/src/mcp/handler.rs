@@ -421,6 +421,14 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
         .cloned()
         .unwrap_or_else(|| json!({}));
 
+    // RAW 输入日志：排障时能看到工具到底收到了什么（截断防刷屏）
+    let args_text = serde_json::to_string(&arguments).unwrap_or_default();
+    state
+        .logs
+        .log_tool("INFO", tool_name, format!("▶ 输入: {}", preview_str(&args_text, 300)))
+        .await;
+    let started = std::time::Instant::now();
+
     // 输入校验（规范 MUST：Servers MUST validate all tool inputs）：
     // 按 inputSchema 校验，失败属「输入校验错误」→ result.isError = true，便于模型自纠正
     if let Some(validator) = &entry.validator {
@@ -464,7 +472,16 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
         let text = serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string());
         state
             .logs
-            .log_tool("INFO", tool_name, format!("✓ 成功（{} 字符）", text.len()))
+            .log_tool(
+                "INFO",
+                tool_name,
+                format!(
+                    "✓ 成功（{} 字符，{:.1} 秒）⬅ 输出: {}",
+                    text.len(),
+                    started.elapsed().as_secs_f32(),
+                    preview_str(&text, 500)
+                ),
+            )
             .await;
         Ok(json!({
             "content": [{ "type": "text", "text": text }],
@@ -476,7 +493,11 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
         error!(tool = %tool_name, error = %msg, "工具执行失败");
         state
             .logs
-            .log_tool("ERROR", tool_name, format!("✗ 失败: {msg}"))
+            .log_tool(
+                "ERROR",
+                tool_name,
+                format!("✗ 失败（{:.1} 秒）: {msg}", started.elapsed().as_secs_f32()),
+            )
             .await;
         // 工具执行错误：按规范放在 result.isError 中返回（而非 JSON-RPC error），
         // 让模型能读到错误文本并自纠正。
@@ -484,6 +505,19 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
             "content": [{ "type": "text", "text": msg }],
             "isError": true,
         }))
+    }
+}
+
+// ==================== 日志截断助手 ====================
+
+/// 日志预览：超长截断并注明原始长度（按字符计，中文友好）
+fn preview_str(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max).collect();
+        format!("{cut}…（截断，共 {n} 字符）")
     }
 }
 
