@@ -21,13 +21,13 @@ kzm_tool!(
     ToolDecl {
         name: "pdf_read_local".into(),
         title: Some("读取本地 PDF".into()),
-        description: "Read text content from a local PDF file. Supports path traversal within local filesystem.".into(),
+        description: "从本地 PDF 文件提取文本内容（支持任意本地路径）。".into(),
         annotations: Some(ToolAnnotations::read_only()),
         category: Some("PDF 文档".into()),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The absolute or relative path to the local PDF file."}
+                "path": {"type": "string", "description": "本地 PDF 文件路径（绝对或相对）"}
             },
             "required": ["path"]
         }),

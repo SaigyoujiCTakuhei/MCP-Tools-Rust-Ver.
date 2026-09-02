@@ -41,13 +41,13 @@ kzm_tool!(
     ToolDecl {
         name: "pdf_read_url".into(),
         title: Some("读取网络 PDF".into()),
-        description: "Extract text content from a PDF file hosted at a URL (downloads to memory).".into(),
+        description: "从指定 URL 下载 PDF 并提取文本内容。".into(),
         annotations: Some(ToolAnnotations::open_world_read_only()),
         category: Some("PDF 文档".into()),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The URL of the PDF file."}
+                "url": {"type": "string", "description": "PDF 文件的 URL"}
             },
             "required": ["url"]
         }),

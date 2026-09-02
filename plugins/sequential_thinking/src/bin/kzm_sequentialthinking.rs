@@ -142,7 +142,7 @@ kzm_tool!(
     ToolDecl {
         name: "sequentialthinking".into(),
         title: Some("序列化思考".into()),
-        description: "Dynamic problem-solving through iterative thought steps. Supports linear, branching, and revision patterns.".into(),
+        description: "通过迭代式思考步骤进行动态问题求解，支持线性推进、分支探索与自我修正。".into(),
         annotations: Some(ToolAnnotations {
             read_only_hint: Some(true),
             destructive_hint: Some(false),
@@ -153,15 +153,15 @@ kzm_tool!(
         input_schema: json!({
             "type": "object",
             "properties": {
-                "thought": {"type": "string", "description": "Your current thinking step"},
-                "nextThoughtNeeded": {"type": "boolean", "description": "Whether another thought step is needed"},
-                "thoughtNumber": {"type": "integer", "minimum": 1, "description": "Current thought number (numeric value, e.g., 1, 2, 3)"},
-                "totalThoughts": {"type": "integer", "minimum": 1, "description": "Estimated total thoughts needed (numeric value, e.g., 5, 10)"},
-                "isRevision": {"type": "boolean", "description": "Whether this revises previous thinking"},
-                "revisesThought": {"type": "integer", "minimum": 1, "description": "Which thought is being reconsidered"},
-                "branchFromThought": {"type": "integer", "minimum": 1, "description": "Branching point thought number"},
-                "branchId": {"type": "string", "description": "Branch identifier"},
-                "needsMoreThoughts": {"type": "boolean", "description": "If more thoughts are needed"},
+                "thought": {"type": "string", "description": "当前的思考步骤内容"},
+                "nextThoughtNeeded": {"type": "boolean", "description": "是否还需要下一步思考"},
+                "thoughtNumber": {"type": "integer", "minimum": 1, "description": "当前思考步骤编号（如 1、2、3）"},
+                "totalThoughts": {"type": "integer", "minimum": 1, "description": "预估所需思考总步数（如 5、10）"},
+                "isRevision": {"type": "boolean", "description": "是否在修正之前的思考"},
+                "revisesThought": {"type": "integer", "minimum": 1, "description": "正在重新考虑的思考编号"},
+                "branchFromThought": {"type": "integer", "minimum": 1, "description": "分支起点思考编号"},
+                "branchId": {"type": "string", "description": "分支标识符"},
+                "needsMoreThoughts": {"type": "boolean", "description": "是否需要更多思考"},
                 "sessionId": {"type": "string", "description": "会话句柄：同 sessionId 的调用共享思维链状态（缺省 default）"}
             },
             "required": ["thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"]
