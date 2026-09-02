@@ -421,11 +421,11 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    // RAW 输入日志：排障时能看到工具到底收到了什么（截断防刷屏）
-    let args_text = serde_json::to_string(&arguments).unwrap_or_default();
+    // RAW 输入日志：排障时能看到工具到底收到了什么（多行 pretty JSON，截断防刷屏）
+    let args_text = serde_json::to_string_pretty(&arguments).unwrap_or_default();
     state
         .logs
-        .log_tool("INFO", tool_name, format!("▶ 输入: {}", preview_str(&args_text, 300)))
+        .log_tool("INFO", tool_name, format!("▶ 输入:\n{}", preview_str(&args_text, 400)))
         .await;
     let started = std::time::Instant::now();
 
@@ -476,10 +476,10 @@ async fn tools_call(state: &AppState, params: &Value) -> Result<Value, RpcError>
                 "INFO",
                 tool_name,
                 format!(
-                    "✓ 成功（{} 字符，{:.1} 秒）⬅ 输出: {}",
+                    "✓ 成功（{} 字符，{:.1} 秒）⬅ 输出:\n{}",
                     text.len(),
                     started.elapsed().as_secs_f32(),
-                    preview_str(&text, 500)
+                    preview_str(&text, 800)
                 ),
             )
             .await;

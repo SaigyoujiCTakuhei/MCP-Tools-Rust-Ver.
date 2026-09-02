@@ -73,7 +73,7 @@ pub fn dashboard_html() -> &'static str {
   .log-level.WARN { color: var(--yellow); background: rgba(210, 153, 34, 0.1); }
   .log-level.ERROR { color: var(--red); background: rgba(248, 81, 73, 0.1); }
   .log-level.DEBUG { color: var(--text-muted); background: rgba(139, 148, 158, 0.1); }
-  .log-msg { flex: 1; word-break: break-all; }
+  .log-msg { flex: 1; word-break: break-all; white-space: pre-wrap; }
   .log-tool { flex-shrink: 0; font-size: 11px; padding: 0 6px; border-radius: 4px; background: rgba(88, 166, 255, 0.15); color: var(--accent); }
   .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-size: 13px; }
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
@@ -81,6 +81,11 @@ pub fn dashboard_html() -> &'static str {
 </head>
 <body>
 <div id="banner">⛔ 服务器已断开 — 请重新启动服务器后刷新页面</div>
+<div id="bye" style="display:none; position:fixed; inset:0; z-index:50; background:var(--bg); color:var(--text); flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; padding:24px;">
+  <div style="font-size:20px; font-weight:600;">⏻ 服务器已优雅退出</div>
+  <div style="font-size:14px; color:var(--text-muted);">服务已停止，此标签页可以关闭了</div>
+  <div style="font-size:12px; color:var(--text-muted);">重新使用请到终端运行 cargo server</div>
+</div>
 <header>
   <h1>🔮 <span>血月</span> MCP 控制台</h1>
   <div class="status" id="statusBox"><div class="dot"></div><span id="connStatus">已连接 · 端口 58081</span><button class="btn" id="btnShutdown" onclick="shutdownServer()" title="等价于在终端按下 Ctrl+C：优雅退出服务器（本标签页保持打开，显示断开横幅）">⏻ 关闭</button></div>
@@ -367,7 +372,15 @@ async function shutdownServer() {
   } catch (e) { /* 关闭进行中连接中断，属预期 */ }
   // 主动释放本页的日志 SSE：服务器排水不再等长连接，可立即完成优雅退出
   if (es) { es.close(); es = null; }
-  showDisconnected();
+  // 浏览器禁止关闭用户自开的标签页——window.close() 尽力而为（仅脚本打开的标签有效），
+  // 否则以全页告别屏接管（复刻 dsh-graceful-exit），死服务器不会显示成破损的重连界面
+  try { window.close(); } catch (e) {}
+  showBye();
+}
+
+function showBye() {
+  connected = false;
+  document.getElementById('bye').style.display = 'flex';   // 全页接管
 }
 
 // 断开统一处理（幂等）：横幅 + 日志「已退出」+ 徽章翻为「已停止」+ 左栏转快照态。
