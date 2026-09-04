@@ -322,7 +322,11 @@ pub async fn handle_legacy_rpc(
     match method {
         "initialize" => Ok(json!({
             "protocolVersion": LEGACY_PROTOCOL_VERSION,
-            "capabilities": { "tools": { "listChanged": true } },
+            "capabilities": {
+                "tools": { "listChanged": true },
+                "prompts": { "listChanged": true },
+                "resources": {},
+            },
             "serverInfo": {
                 "name": "KazeMiMiRin MCP Server",
                 "version": env!("CARGO_PKG_VERSION"),
