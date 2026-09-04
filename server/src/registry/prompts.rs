@@ -186,14 +186,95 @@ fn render_template(
             }
         }
     }
-    let mut out = template.to_string();
-    if let Some(map) = arguments.as_object() {
-        for (k, v) in map {
-            let s = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
-            out = out.replace(&format!("{{{{{k}}}}}"), &s);
+    // 收集「名字 → 值」；空串视为未提供（占位符走各模板自带的默认语义）
+    let mut map: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = arguments.as_object() {
+        for (k, v) in obj {
+            if v.is_null() {
+                continue;
+            }
+            let s = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            if !s.is_empty() {
+                map.push((k.clone(), s));
+            }
         }
     }
+
+    let mut out = template.to_string();
+    // 第一遍：双花括号 {{name}}（MCP 惯例）
+    for (k, v) in &map {
+        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    }
+    // 第二遍：单花括号 {name}（v11 模板的 Python format() 惯例，
+    // 如 dm-text-game 的 {base}/{opening_text}/{player_name}）
+    for (k, v) in &map {
+        out = out.replace(&format!("{{{k}}}"), v);
+    }
+    // v11 嵌套别名：参数值内部的 {{user}}/{user} 指代玩家名
+    // （如 opening_text 的开场白含 {{user}} 时替换为玩家名）；
+    // 未提供 player_name 时按其参数描述回退为「你」
+    let player = map
+        .iter()
+        .find(|(k, _)| k == "player_name")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "你".to_string());
+    out = out.replace("{{user}}", &player).replace("{user}", &player);
+    // player_name 未提供时，按其参数描述回退为「你」
+    if !map.iter().any(|(k, _)| k == "player_name") {
+        out = out.replace("{{player_name}}", &player).replace("{player_name}", &player);
+    }
     Ok(out)
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn single_brace_v11_convention() {
+        let decl = Some(vec![PromptArgument { name: "base".into(), description: String::new(), required: false }]);
+        let out = render_template("基底：{base}", &json!({ "base": "123" }), &decl).unwrap();
+        assert_eq!(out, "基底：123");
+    }
+
+    #[test]
+    fn double_brace_mcp_convention() {
+        let decl = Some(vec![PromptArgument { name: "code".into(), description: String::new(), required: true }]);
+        let out = render_template("评审：{{code}}", &json!({ "code": "fn main(){}" }), &decl).unwrap();
+        assert_eq!(out, "评审：fn main(){}");
+    }
+
+    #[test]
+    fn user_alias_nested_in_value() {
+        // v11 语义：opening_text 的值里可含 {{user}}，替换为玩家名
+        let decl = Some(vec![
+            PromptArgument { name: "opening_text".into(), description: String::new(), required: false },
+            PromptArgument { name: "player_name".into(), description: String::new(), required: false },
+        ]);
+        let out = render_template(
+            "{{opening_text}}",
+            &json!({ "opening_text": "{{user}}醒来", "player_name": "血月" }),
+            &decl,
+        ).unwrap();
+        assert_eq!(out, "血月醒来");
+    }
+
+    #[test]
+    fn player_name_defaults_to_ni() {
+        // 参数描述承诺：player_name 为空时默认「你」
+        let out = render_template("你是{{player_name}}", &json!({}), &None).unwrap();
+        assert_eq!(out, "你是你");
+    }
+
+    #[test]
+    fn required_missing_rejected() {
+        let decl = Some(vec![PromptArgument { name: "code".into(), description: String::new(), required: true }]);
+        assert!(render_template("{{code}}", &json!({}), &decl).is_err());
+    }
 }
 
 // ==================== 资源 ====================
