@@ -96,13 +96,23 @@ impl PromptRegistry {
             .await
             .iter()
             .map(|p| {
-                json!({
+                // 注意：官方 SDK 的 zod 校验接受「字段缺省」但不接受显式 null
+                // （arguments/title 为 null 会使整个 listPrompts 结果判无效），
+                // 因此可选字段在 None 时必须省略而非输出 null
+                let mut item = json!({
                     "name": p.name,
-                    "title": p.title,
-                    "category": p.category,
                     "description": p.description,
-                    "arguments": p.arguments,
-                })
+                });
+                if let Some(title) = &p.title {
+                    item["title"] = json!(title);
+                }
+                if let Some(category) = &p.category {
+                    item["category"] = json!(category);
+                }
+                if let Some(args) = &p.arguments {
+                    item["arguments"] = json!(args);
+                }
+                item
             })
             .collect()
     }
