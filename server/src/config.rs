@@ -34,6 +34,9 @@ pub struct ToolsConfig {
     pub discovery_path: String,
     #[serde(default = "default_timeout")]
     pub default_timeout: u64,
+    /// 开发态源码监听：保存源码后自动编译并热装载对应工具（发布部署请保持 false）
+    #[serde(default)]
+    pub watch: bool,
 }
 
 /// MCP 数据文件（提示词 / 资源）目录
@@ -101,6 +104,7 @@ impl Default for AppConfig {
             tools: ToolsConfig {
                 discovery_path: String::new(),
                 default_timeout: 30,
+                watch: false,
             },
             mcp: McpConfig {
                 prompts_path: default_prompts_path(),

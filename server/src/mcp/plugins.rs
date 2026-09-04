@@ -235,17 +235,26 @@ pub fn register_plugin(state: &AppState, binary: PathBuf, decl: ToolDecl) {
         .register(def, Box::new(PluginExecutor { binary: binary.clone() }), Some(binary));
 }
 
+/// 热装载二进制：重新探测产物 → 覆盖登记并启用（重载与源码监听共用的核心步骤）
+pub async fn reload_binary(state: &AppState, binary: &Path) -> anyhow::Result<String> {
+    let exec = PluginExecutor { binary: binary.to_path_buf() };
+    let decl = exec
+        .probe_decl()
+        .await
+        .with_context(|| format!("探测工具二进制失败: {}", binary.display()))?;
+    let new_name = decl.name.clone();
+    register_plugin(state, binary.to_path_buf(), decl);
+    Ok(new_name)
+}
+
 /// 热重载单个插件工具：重新探测二进制 → 覆盖登记并启用。
 /// 成功 → INFO 日志；失败（无法唤起）→ ERROR 日志（需求二）。
 pub async fn reload_tool(state: &AppState, name: &str) -> anyhow::Result<String> {
     let Some(path) = state.registry.plugin_path(name) else {
         bail!("工具 {name} 不是插件工具（无二进制路径）");
     };
-    let exec = PluginExecutor { binary: path.clone() };
-    match exec.probe_decl().await {
-        Ok(decl) => {
-            let new_name = decl.name.clone();
-            register_plugin(state, path, decl);
+    match reload_binary(state, &path).await {
+        Ok(new_name) => {
             state
                 .logs
                 .log("INFO", format!("工具 {name} 已从磁盘重载（当前名: {new_name}）"))

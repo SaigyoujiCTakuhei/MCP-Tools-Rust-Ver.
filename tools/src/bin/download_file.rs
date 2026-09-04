@@ -31,12 +31,12 @@ fn run(args: Value) -> ToolOutput {
         };
         if let Some(parent) = Path::new(&save_path).parent() {
             if !parent.as_os_str().is_empty() {
-                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                if let Err(e) = std::fs::create_dir_all(parent) {
                     return ToolOutput::err(format!("创建父目录失败: {e}"));
                 }
             }
         }
-        match tokio::fs::write(&save_path, &bytes).await {
+        match std::fs::write(&save_path, &bytes) {
             Ok(_) => ToolOutput::ok(json!({
                 "status": "downloaded",
                 "path": save_path,

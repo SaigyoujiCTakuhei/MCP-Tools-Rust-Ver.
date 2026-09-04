@@ -13,6 +13,7 @@ logging:
 tools:
   discovery_path: ""          # 插件扫描目录（kzm-* 可执行文件）；空 = exe 同目录（cargo run 时即 target/debug）
   default_timeout: 300        # 单次工具调用超时（秒，超时会连子进程一起终止；批量导入需较长超时）
+  watch: true                 # 开发态源码监听：保存源码后自动编译并热装载对应工具（发布部署建议 false）
 
 mcp:
   prompts_path: "mcp_data/prompts"     # 提示词目录（*.json 或带 YAML front matter 的 *.md，热重载）

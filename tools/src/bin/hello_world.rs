@@ -3,7 +3,7 @@ use tool_kit::{kzm_tool, ToolAnnotations, ToolDecl, ToolOutput};
 
 fn run(args: Value) -> ToolOutput {
     let name = args["name"].as_str().unwrap_or("World");
-    ToolOutput::ok(serde_json::json!({ "message": format!("Hello, {name}! 你好喵～") }))
+    ToolOutput::ok(serde_json::json!({ "message": format!("Hello, {name}! 【监听器自动编译版】") }))
 }
 
 kzm_tool!(
@@ -22,3 +22,8 @@ kzm_tool!(
     },
     run
 );
+// watcher-e2e-1788544556
+// watcher-fast-1788545859
+// watcher-final-1788546362
+// watcher-final2-1788546554
+// watcher-verify-1788546821

@@ -7,6 +7,7 @@ mod dashboard;
 mod executor;
 mod mcp;
 mod registry;
+mod watcher;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -156,6 +157,18 @@ async fn main() -> anyhow::Result<()> {
     info!(count = registry.count(), "🔧 插件工具加载完成");
 
     // ========== 6. 构建路由 ==========
+    // 开发态源码监听（tools.watch: true 时挂载）：保存源码 → 自动编译 → 自动热装载
+    let mut watcher_handle = None;
+    if app_config.tools.watch {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        match watcher::spawn(state.clone(), root, logs.clone()) {
+            Ok(h) => watcher_handle = Some(h),
+            Err(e) => tracing::warn!("源码监听挂载失败: {e:#}"),
+        }
+    }
     // 注意：/mcp、/sse、/message 只能在 transport::build_router 中注册一次，
     // 重复注册会使 axum 在启动时 panic。
     let mcp_router = mcp::transport::build_router(state.clone());
@@ -254,6 +267,11 @@ async fn main() -> anyhow::Result<()> {
         _ = shutdown_then_deadline(shutdown_rx, logs.clone(), grace_tx) => {
             info!("⚠️ 排水超时（10 秒），服务器已强制退出");
         }
+    }
+    // 退出时卸载源码监听（子进程 kill_on_drop，不会残留孤儿编译）
+    if let Some(h) = watcher_handle {
+        h.abort();
+        info!("👀 源码监听已停止");
     }
     Ok(())
 }
