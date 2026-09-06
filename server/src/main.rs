@@ -7,6 +7,7 @@ mod dashboard;
 mod executor;
 mod mcp;
 mod registry;
+mod tasks;
 mod watcher;
 
 use std::path::PathBuf;
@@ -66,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let logs = Arc::new(LogSystem::new());
     let (lists_changed, _) = broadcast::channel::<String>(64);
     let legacy_sessions = Arc::new(mcp::handler::LegacySessions::new());
+    let tasks = Arc::new(tasks::TaskRegistry::new(app_config.tools.default_timeout));
 
     let prompts_dir = config_path
         .parent()
@@ -145,10 +147,11 @@ async fn main() -> anyhow::Result<()> {
         discovery_dirs.clone(),
         shutdown_tx,
         legacy_sessions,
+        tasks,
     );
 
     // ========== 5. 发现并加载插件工具（失败 → ERROR 日志，不阻断启动） ==========
-    let plugins = mcp::plugins::discover(&discovery_dirs, &logs).await;
+    let plugins = mcp::plugins::discover(&discovery_dirs, &logs, &state.tasks).await;
     for (binary, decl) in plugins {
         mcp::plugins::register_plugin(&state, binary, decl.clone());
         logs.log_tool("INFO", &decl.name, "插件工具已加载").await;

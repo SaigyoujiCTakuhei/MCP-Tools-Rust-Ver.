@@ -234,6 +234,8 @@ pub struct AppState {
     pub shutdown: Arc<watch::Sender<bool>>,
     /// Legacy（2024-11-05）会话表：sessionId → 响应回传通道
     pub legacy_sessions: Arc<LegacySessions>,
+    /// 运行中任务注册表（进展流）
+    pub tasks: Arc<crate::tasks::TaskRegistry>,
 }
 
 impl AppState {
@@ -251,6 +253,7 @@ impl AppState {
         discovery_dirs: Vec<std::path::PathBuf>,
         shutdown: Arc<watch::Sender<bool>>,
         legacy_sessions: Arc<LegacySessions>,
+        tasks: Arc<crate::tasks::TaskRegistry>,
     ) -> Self {
         Self {
             registry,
@@ -265,6 +268,7 @@ impl AppState {
             discovery_dirs,
             shutdown,
             legacy_sessions,
+            tasks,
         }
     }
 }

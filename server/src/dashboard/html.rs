@@ -65,6 +65,16 @@ pub fn dashboard_html() -> &'static str {
   .entry-card .desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
   .entry-card .meta { font-size: 11px; color: var(--accent); margin-top: 6px; }
   .panel-right { flex: 1; display: flex; flex-direction: column; background: var(--bg); }
+  .rtab { padding: 8px 14px; font-size: 12px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; font-family: inherit; }
+  .rtab-active { color: var(--accent); border-bottom-color: var(--accent); }
+  .task-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .task-card .thead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .task-card .targs { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  .task-card .tout { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow-y: auto; color: var(--text); }
+  .tbadge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; }
+  .tbadge-running { background: rgba(88, 166, 255, 0.2); color: var(--accent); }
+  .tbadge-ok { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+  .tbadge-failed, .tbadge-killed { background: rgba(248, 81, 73, 0.2); color: var(--red); }
   .log-area { flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 13px; line-height: 1.7; }
   .log-entry { padding: 2px 0; display: flex; gap: 10px; align-items: baseline; }
   .log-time { color: var(--text-muted); flex-shrink: 0; font-size: 12px; }
@@ -110,12 +120,19 @@ pub fn dashboard_html() -> &'static str {
     </div>
   </div>
   <div class="panel-right">
+    <div class="tabs">
+      <button class="rtab rtab-active" id="rtabLogs" onclick="switchRight('logs')">📋 日志</button>
+      <button class="rtab" id="rtabTasks" onclick="switchRight('tasks')">⚡ 任务</button>
+    </div>
     <div class="panel-header">
-      <h2>📋 运行日志 <span id="filterChip" style="display:none; cursor:pointer; color:var(--accent);" onclick="clearFilter()" title="点击取消筛选">[筛选中，点击取消]</span></h2>
+      <h2 id="rightTitle">📋 运行日志 <span id="filterChip" style="display:none; cursor:pointer; color:var(--accent);" onclick="clearFilter()" title="点击取消筛选">[筛选中，点击取消]</span></h2>
       <button class="btn" onclick="clearLogs()">🗑️ 清空</button>
     </div>
     <div class="log-area" id="logArea">
       <div class="empty-state" id="logEmpty">等待日志…</div>
+    </div>
+    <div class="log-area" id="taskArea" style="display:none">
+      <div class="empty-state">暂无任务</div>
     </div>
   </div>
 </div>
@@ -126,6 +143,10 @@ let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
 let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
+let rightTab = 'logs';          // 右侧页签：logs | tasks
+let tasksData = [];             // 任务快照记录
+let taskOutputs = {};           // id → {lines: [], done: bool}（实时进展缓冲）
+let taskEs = null;              // 任务事件流
 let expandedGroups = {};        // 工具分组展开状态（key=分组名，跨重渲染保留）
 let promptGroupsOpen = {};      // 提示词分组展开状态
 let disconnectNotified = false; // 断开态守卫：EventSource 每次重连失败都会触发 onerror，只处理第一次
@@ -357,6 +378,75 @@ async function loadLogs() {
     history.forEach(appendEntry);
     rerenderLogs();
   } catch (e) {}
+}
+
+// ============ 右侧页签：日志 / 任务 ============
+
+function switchRight(tab) {
+  rightTab = tab;
+  document.getElementById('rtabLogs').classList.toggle('rtab-active', tab === 'logs');
+  document.getElementById('rtabTasks').classList.toggle('rtab-active', tab === 'tasks');
+  document.getElementById('logArea').style.display = tab === 'logs' ? '' : 'none';
+  document.getElementById('taskArea').style.display = tab === 'tasks' ? '' : 'none';
+  if (tab === 'tasks') {
+    fetchTasks();
+    if (!taskEs || taskEs.readyState === 2) openTaskStream();
+  } else if (taskEs) {
+    taskEs.close(); taskEs = null;
+  }
+}
+
+async function fetchTasks() {
+  try {
+    const res = await fetch('/api/tasks');
+    tasksData = await res.json();
+    tasksData.forEach(r => { if (!(r.id in taskOutputs)) taskOutputs[r.id] = { lines: [], done: r.status !== 'running' }; });
+    renderTasks();
+  } catch (e) { addLogDirect('ERROR', '刷新任务失败: ' + e.message); }
+}
+
+function openTaskStream() {
+  taskEs = new EventSource('/api/tasks/stream');
+  taskEs.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'start') {
+        if (!(d.id in taskOutputs)) {
+          tasksData.unshift({ id: d.id, tool: d.tool, args: d.args, status: 'running', startedAt: '' });
+          taskOutputs[d.id] = { lines: [], done: false };
+          if (rightTab === 'tasks') renderTasks();
+        }
+      } else if (d.type === 'line') {
+        const buf = taskOutputs[d.id] || (taskOutputs[d.id] = { lines: [], done: false });
+        buf.lines.push((d.stream === 'stderr' ? '' : '') + d.text);
+        if (buf.lines.length > 300) buf.lines.shift();
+        const pre = document.getElementById('tout-' + d.id);
+        if (pre) { pre.textContent = buf.lines.join('\n'); pre.scrollTop = pre.scrollHeight; }
+      } else if (d.type === 'exit') {
+        const rec = tasksData.find(x => x.id === d.id);
+        if (rec) rec.status = d.ok ? 'ok' : (d.note === '已终止' ? 'killed' : 'failed');
+        const buf = taskOutputs[d.id]; if (buf) buf.done = true;
+        if (rightTab === 'tasks') renderTasks();
+      }
+    } catch {}
+  };
+  taskEs.onerror = () => { showDisconnected(); };
+}
+
+function renderTasks() {
+  const el = document.getElementById('taskArea');
+  if (tasksData.length === 0) { el.innerHTML = '<div class="empty-state">暂无任务</div>'; return; }
+  const BADGE = { running: ['tbadge-running', '运行中'], ok: ['tbadge-ok', '已完成'], failed: ['tbadge-failed', '失败'], killed: ['tbadge-killed', '已终止'] };
+  el.innerHTML = tasksData.slice(0, 30).map(r => {
+    const [bcls, btxt] = BADGE[r.status] || ['tbadge-running', r.status];
+    const lines = (taskOutputs[r.id] || {}).lines || [];
+    return `
+      <div class="task-card">
+        <div class="thead">⚡ ${r.tool} <span class="tbadge ${bcls}">${btxt}</span> <span style="color:var(--text-muted);font-weight:400;font-size:11px">${r.startedAt}</span></div>
+        <div class="targs">${escapeHtml(r.args || '')}</div>
+        ${lines.length ? `<pre class="tout" id="tout-${r.id}">${escapeHtml(lines.join('\n'))}</pre>` : '<div class="targs" style="color:var(--text-muted)">（暂无进展输出）</div>'}
+      </div>`;
+  }).join('');
 }
 
 // ============ 连接状态（需求一：断开横幅） ============

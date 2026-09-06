@@ -30,7 +30,7 @@ fn run_shell(command: &str) -> std::io::Result<std::process::Output> {
         Command::new("powershell")
             .args(["-NoProfile", "-Command", &wrapped])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::inherit())   // stderr 实时透传到本工具的 stderr → 服务器进展流
             .output()
     }
     #[cfg(not(windows))]
@@ -38,13 +38,13 @@ fn run_shell(command: &str) -> std::io::Result<std::process::Output> {
         let attempt = Command::new("bash")
             .args(["-c", command])
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::inherit())   // 实时透传
             .output();
         match attempt {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Command::new("/bin/sh")
                 .args(["-c", command])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stderr(Stdio::inherit())
                 .output(),
             other => other,
         }

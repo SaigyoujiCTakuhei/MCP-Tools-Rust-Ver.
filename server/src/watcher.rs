@@ -231,7 +231,7 @@ pub async fn run(state: AppState, root: PathBuf, logs: Arc<LogSystem>) {
                 Ok(o) if o.status.success() => {
                     let mut loaded = Vec::new();
                     for bin_path in member.bin_paths() {
-                        match crate::mcp::plugins::reload_binary(&state, &bin_path).await {
+                        match crate::mcp::plugins::reload_binary(&state, &bin_path, true).await {
                             Ok(tool_name) => loaded.push(tool_name),
                             Err(e) => {
                                 logs

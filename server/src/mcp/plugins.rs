@@ -11,6 +11,7 @@
 /// - 加载/重载失败一律写 ERROR 日志（需求二：工具无法唤起要可见）
 use anyhow::{anyhow, bail, Context};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -29,6 +30,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// 子进程插件执行器
 pub struct PluginExecutor {
     pub binary: PathBuf,
+    /// 任务登记表（进展流广播）
+    pub tasks: Arc<crate::tasks::TaskRegistry>,
+    /// 显示名（decl.name，任务页/日志用）
+    pub label: String,
 }
 
 impl PluginExecutor {
@@ -51,23 +56,118 @@ impl PluginExecutor {
 #[async_trait::async_trait]
 impl ToolExecutor for PluginExecutor {
     async fn execute(&self, args: serde_json::Value) -> ToolResult {
-        let output = match run_mode(&self.binary, "call", Some(&args)).await {
-            Ok(o) => o,
-            Err(e) => return ToolResult::err(format!("工具进程启动失败: {e}")),
+        use tokio::io::AsyncReadExt;
+
+        let args_preview = {
+            let a = serde_json::to_string(&args).unwrap_or_default();
+            if a.chars().count() > 200 { format!("{}…", a.chars().take(200).collect::<String>()) } else { a }
         };
-        if !output.status.success() {
+        let task_id = self.tasks.start(&self.label, &args_preview);
+        self.tasks.spawn_watchdog(&task_id);
+
+        // 建子进程（stdout=结果协议，缓冲；stderr=进展流，实时转发）
+        let mut child = match Command::new(&self.binary)
+            .arg("call")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                self.tasks.mark_killed(&task_id, "进程启动失败");
+                return ToolResult::err(format!("工具进程启动失败: {e}"));
+            }
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let payload = serde_json::to_string(&args).unwrap_or_default();
+            let _ = stdin.write_all(payload.as_bytes()).await;
+            let _ = stdin.write_all(b"\n").await;
+        }
+
+        // stderr 进展流：逐段（\n / \r 分隔）实时广播；同时收集全文备用
+        let (se_tx, mut se_rx) = tokio::sync::mpsc::channel::<String>(16);
+        if let Some(stderr) = child.stderr.take() {
+            let tasks = self.tasks.clone();
+            let tid = task_id.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let mut acc: Vec<u8> = Vec::new();
+                let mut reader = stderr;
+                loop {
+                    match reader.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            acc.extend_from_slice(&buf[..n]);
+                            while let Some(pos) = acc.iter().position(|&b| b == b'\n' || b == b'\r') {
+                                let seg: Vec<u8> = acc.drain(..=pos).collect();
+                                let text = String::from_utf8_lossy(&seg[..seg.len() - 1])
+                                    .trim_end_matches('\r')
+                                    .to_string();
+                                if !text.trim().is_empty() {
+                                    tasks.line(&tid, "stderr", &text);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !acc.is_empty() {
+                    let text = String::from_utf8_lossy(&acc).trim().to_string();
+                    if !text.is_empty() {
+                        tasks.line(&tid, "stderr", &text);
+                    }
+                }
+                let _ = se_tx.send(String::from_utf8_lossy(&acc).to_string());
+            });
+        } // 无 stderr 时 drop 发送端（接收端即收到关闭）
+
+        // stdout：结果协议（ToolOutput JSON），缓冲至进程结束
+        let stdout_task = match child.stdout.take() {
+            Some(stdout) => {
+                let mut reader = stdout;
+                Some(tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let _ = reader.read_to_end(&mut buf).await;
+                    buf
+                }))
+            }
+            None => None,
+        };
+
+        // 等子进程退出（stderr 读任务独立收集，不受影响）
+        let started = std::time::Instant::now();
+        let status = match child.wait().await {
+            Ok(s) => s,
+            Err(e) => {
+                self.tasks.mark_killed(&task_id, &format!("wait 失败: {e}"));
+                return ToolResult::err(format!("等待工具进程失败: {e}"));
+            }
+        };
+        let stdout_buf = match stdout_task {
+            Some(h) => h.await.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let stderr_text = se_rx.recv().await.unwrap_or_default();
+
+        self.tasks.finish(
+            &task_id,
+            status.success(),
+            status.code().map(|c| c as i64),
+            started.elapsed().as_secs_f64(),
+            String::from_utf8_lossy(&stdout_buf).to_string(),
+            stderr_text.clone(),
+        );
+
+        if !status.success() {
             return ToolResult::err(format!(
                 "工具进程退出码 {}，stderr: {}",
-                output.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&output.stderr).trim()
+                status.code().unwrap_or(-1),
+                stderr_text.trim()
             ));
         }
-        match serde_json::from_slice::<ToolOutput>(&output.stdout) {
-            Ok(o) => ToolResult {
-                success: o.success,
-                data: o.data,
-                error: o.error,
-            },
+        match serde_json::from_slice::<ToolOutput>(&stdout_buf) {
+            Ok(o) => ToolResult { success: o.success, data: o.data, error: o.error },
             Err(e) => ToolResult::err(format!("工具输出不是合法 ToolOutput JSON: {e}")),
         }
     }
@@ -146,11 +246,12 @@ fn find_plugin_binaries(dirs: &[PathBuf]) -> Vec<PathBuf> {
 pub async fn discover(
     dirs: &[PathBuf],
     logs: &crate::mcp::handler::LogSystem,
+    tasks: &std::sync::Arc<crate::tasks::TaskRegistry>,
 ) -> Vec<(PathBuf, ToolDecl)> {
     let binaries = find_plugin_binaries(dirs);
     let mut found = Vec::new();
     for path in binaries {
-        let exec = PluginExecutor { binary: path.clone() };
+        let exec = PluginExecutor { binary: path.clone(), tasks: tasks.clone(), label: path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string() };
         match exec.probe_decl().await {
             Ok(decl) => {
                 info!(tool = %decl.name, binary = %path.display(), "插件工具已发现");
@@ -178,7 +279,7 @@ pub async fn rescan_new_tools(state: &AppState) -> anyhow::Result<Vec<String>> {
         if state.registry.has_plugin_path(&path) {
             continue; // 已登记（无论启用与否）——重载走 per-tool reload 接口
         }
-        let exec = PluginExecutor { binary: path.clone() };
+        let exec = PluginExecutor { binary: path.clone(), tasks: state.tasks.clone(), label: path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string() };
         match exec.probe_decl().await {
             Ok(decl) => {
                 let tool_name = decl.name.clone();
@@ -232,19 +333,44 @@ pub fn register_plugin(state: &AppState, binary: PathBuf, decl: ToolDecl) {
     };
     state
         .registry
-        .register(def, Box::new(PluginExecutor { binary: binary.clone() }), Some(binary));
+        .register(
+            def,
+            Box::new(PluginExecutor {
+                binary: binary.clone(),
+                tasks: state.tasks.clone(),
+                label: binary.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string(),
+            }),
+            Some(binary),
+        );
 }
 
-/// 热装载二进制：重新探测产物 → 覆盖登记并启用（重载与源码监听共用的核心步骤）
-pub async fn reload_binary(state: &AppState, binary: &Path) -> anyhow::Result<String> {
-    let exec = PluginExecutor { binary: binary.to_path_buf() };
+/// 热装载二进制：重新探测产物 → 覆盖登记。
+/// restore_state=true 时保留该工具既有的启用/禁用状态（源码监听的后台装载用，
+/// 不悄悄重新启用用户手动卸载的工具）；false 时恢复为启用（⟳ 重载按钮语义）。
+pub async fn reload_binary(
+    state: &AppState,
+    binary: &Path,
+    restore_state: bool,
+) -> anyhow::Result<String> {
+    let exec = PluginExecutor { binary: binary.to_path_buf(), tasks: state.tasks.clone(), label: "?".into() };
     let decl = exec
         .probe_decl()
         .await
         .with_context(|| format!("探测工具二进制失败: {}", binary.display()))?;
-    let new_name = decl.name.clone();
+    let name = decl.name.clone();
+    let prev_enabled = state
+        .registry
+        .get(&name)
+        .and_then(|e| e.definition.read().ok().map(|d| d.enabled));
     register_plugin(state, binary.to_path_buf(), decl);
-    Ok(new_name)
+    if restore_state && prev_enabled == Some(false) {
+        state.registry.toggle(&name);
+        state
+            .logs
+            .log("INFO", format!("工具 {name} 已热装载（保持禁用状态）"))
+            .await;
+    }
+    Ok(name)
 }
 
 /// 热重载单个插件工具：重新探测二进制 → 覆盖登记并启用。
@@ -253,7 +379,7 @@ pub async fn reload_tool(state: &AppState, name: &str) -> anyhow::Result<String>
     let Some(path) = state.registry.plugin_path(name) else {
         bail!("工具 {name} 不是插件工具（无二进制路径）");
     };
-    match reload_binary(state, &path).await {
+    match reload_binary(state, &path, false).await {
         Ok(new_name) => {
             state
                 .logs

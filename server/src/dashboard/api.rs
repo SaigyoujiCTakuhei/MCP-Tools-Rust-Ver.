@@ -116,6 +116,34 @@ pub async fn api_shutdown(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+// ==================== 运行任务（进展可见性） ====================
+
+/// GET /api/tasks — 任务快照（running 在前）
+pub async fn api_tasks(State(state): State<AppState>) -> impl IntoResponse {
+    axum::Json(state.tasks.snapshot())
+}
+
+/// GET /api/tasks/stream — 任务事件流（start / line / exit，SSE）
+pub async fn api_tasks_stream(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    let rx = state.tasks.subscribe();
+    let stream = async_stream::stream! {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    yield Ok(Event::default().data(ev.to_string()));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    };
+    Sse::new(stream).keep_alive(KeepAlive::new())
+}
+
 // ==================== 提示词 / 资源（需求四） ====================
 
 /// GET /api/prompts — 提示词列表
@@ -188,6 +216,8 @@ pub fn build_dashboard_router(state: AppState) -> Router {
         .route("/api/tools", get(api_tools))
         .route("/api/tools/rescan", post(api_rescan_tools))
         .route("/api/shutdown", post(api_shutdown))
+        .route("/api/tasks", get(api_tasks))
+        .route("/api/tasks/stream", get(api_tasks_stream))
         .route("/api/tools/:name/unload", post(api_unload))
         .route("/api/tools/:name/load", post(api_load))
         .route("/api/tools/:name/reload", post(api_reload_tool))
