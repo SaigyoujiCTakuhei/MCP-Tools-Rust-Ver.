@@ -40,6 +40,10 @@ name = "kzm-memory-forget"
 path = "src/bin/memory_forget.rs"
 
 [[bin]]
+name = "kzm-db-guide"
+path = "src/bin/db_guide.rs"
+
+[[bin]]
 name = "kzm-memory-import"
 path = "src/bin/memory_import.rs"
 
