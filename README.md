@@ -3,7 +3,9 @@
 > 基于 Rust 的 MCP 服务器，实现 **MCP 规范修订版 2026-07-28（社区俗称 "MCP 2.0"）**，
 > 同时保留 **Legacy 2024-11-05 HTTP+SSE** 兼容通道（供 llama.cpp UI 等旧客户端使用）。
 > 工具为**子进程插件**（改动 → 重编译 → 热重载，无需重启服务器），
-> 另提供文件驱动的**提示词与资源**。内置 Web 管理面板。作者：风见血月
+> 另提供文件驱动的**提示词与资源**。内置 Web 管理面板。
+>
+> **快速体验**：`cargo build` → `cargo server` → 浏览器打开 `http://127.0.0.1:58081`（WebUI）。
 
 ---
 
@@ -11,7 +13,7 @@
 
 | 维度 | 说明 |
 |------|------|
-| 工具 | 30 个 = 23 通用（`tools/`）+ 7 域插件（`plugins/`：pdf_reader 2、sequential_thinking 1、memory 4），全部 `kzm-*` 子进程插件，启动自动发现；失败写 ERROR 日志 |
+| 工具 | 32 个 = 23 通用（`tools/`）+ 9 域插件（`plugins/`：pdf_reader 2、sequential_thinking 1、memory 域 6，另有 memory-daemon 嵌入守护进程），全部 `kzm-*` 子进程插件，启动自动发现；失败写 ERROR 日志 |
 | 热重载 | 改工具源码 → `cargo build` → WebUI「⟳ 重载」即生效，不影响其他工具、不重启服务器 |
 | 协议面 | 现代 2026-07-28（`POST /mcp`）+ Legacy 2024-11-05（`GET /sse` + `POST /message`） |
 | 提示词/资源 | 文件驱动（`mcp_data/prompts`、`mcp_data/resources`），热重载并经协议列出（`prompts/list`、`resources/list`） |
