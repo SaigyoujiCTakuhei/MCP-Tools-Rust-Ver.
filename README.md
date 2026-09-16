@@ -31,7 +31,7 @@ New_Architecture_v00/
 ├── Cargo.toml                 # workspace（members: server, tool_kit, tools）
 ├── config.yaml                # 运行时配置（端口/鉴权/Origin 白名单/插件目录/超时/mcp 数据目录）
 ├── mcp_data/
-│   ├── prompts/               # 提示词（*.json 或带 YAML front matter 的 *.md，兼容 v11 Skills 格式）
+│   ├── prompts/               # 提示词（*.json 或带 YAML front matter 的 *.md，兼容 v10 Skills 格式）
 │   └── resources/             # 资源（*.json；file 型资源每次读取最新内容）
 ├── server/                    # 服务器本体
 │   └── src/
@@ -48,11 +48,11 @@ New_Architecture_v00/
 │       └── dashboard/         # WebUI（api.rs + html.rs）
 ├── tool_kit/                  # 插件契约：ToolDecl / ToolOutput / kzm_tool! 宏
 ├── tools/src/bin/             # 23 个通用工具插件（kzm-*.rs，一个工具一个二进制）
-├── plugins/                   # 域插件目录（按功能一域一 crate，对应 v11 的 Lib/<模块>/）
-│   ├── pdf_reader/            # v11 pdf_reader 移植：pdf_read_local / pdf_read_url
-│   │   ├── src/pdf_utils.rs   # 公共函数（对应 v11 的 scripts/pdf_utils.py）
+├── plugins/                   # 域插件目录（按功能一域一 crate，对应 v10 的 Lib/<模块>/）
+│   ├── pdf_reader/            # v10 pdf_reader 移植：pdf_read_local / pdf_read_url
+│   │   ├── src/pdf_utils.rs   # 公共函数（对应 v10 的 scripts/pdf_utils.py）
 │   │   └── src/bin/           # kzm-pdf-read-local、kzm-pdf-read-url
-│   ├── sequential_thinking/   # v11 sequential_thinking 移植：sequentialthinking（含状态）
+│   ├── sequential_thinking/   # v10 sequential_thinking 移植：sequentialthinking（含状态）
 │   │   ├── src/thinking_core.rs  # 纯 def 库（对应 scripts/thinking_core.py，含单元测试）
 │   │   ├── src/config.rs         # 常量（对应 scripts/config.py）
 │   │   └── src/bin/              # kzm-sequentialthinking（对应 scripts/tool_register.py）
@@ -114,8 +114,8 @@ curl -X POST http://127.0.0.1:58081/api/tools/hello_world/reload
 }
 ```
 
-或 Markdown + YAML front matter（**兼容 v11 的 Anthropic Skills 格式**，`params` 即参数声明，
-正文为模板）——把 v11 `Lib/prompts/skills/*.md` 复制进来即可使用。
+或 Markdown + YAML front matter（**兼容 v10 的 Anthropic Skills 格式**，`params` 即参数声明，
+正文为模板）——把 v10 `Lib/prompts/skills/*.md` 复制进来即可使用。
 
 **资源**（`mcp_data/resources/*.json`）：`text` 内联内容或 `file` 相对路径
 （file 型资源每次 `resources/read` 都读磁盘最新内容，改文件即热更新）。
@@ -191,9 +191,9 @@ cargo test                 # 单元测试
 config.yaml 查找顺序：exe 同目录 → 工作目录。关闭：Ctrl+C / SIGTERM 触发优雅排水，
 keep-alive 长连接最多拖延 10 秒后强制退出。
 
-## 10. 与 v11 (Playground) 的对应
+## 10. 与 v10 (Playground) 的对应
 
-| v11（Python, 147 工具 + 35 提示词） | Rust 版 |
+| v10（Python, 147 工具 + 35 提示词） | Rust 版 |
 |---|---|
 | 基础通用工具（Lib/tools/scripts 同名项） | ✅ 23 个插件，全部热重载 |
 | 文件夹自动发现工具 | ✅ kzm-* 自动发现 + 重载 + 手动扫描新插件 |

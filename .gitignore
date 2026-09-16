@@ -16,3 +16,7 @@ mcp_data/sequential_thinking/
 MCP Rust 实现计划讨论_完整会话.md
 MCP Rust 实现计划讨论与实现_01-14.md
 MCP 工具的 Rust 实现计划讨论.txt
+
+# 除 README.md 外的 .md 一律不入库（2026-09-08 用户指示；提示词模板等已本地保留）
+*.md
+!README.md
