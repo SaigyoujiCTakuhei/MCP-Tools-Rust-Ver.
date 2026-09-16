@@ -197,10 +197,10 @@ keep-alive 长连接最多拖延 10 秒后强制退出。
 
 ## 10. 与旧版 Python 实现的关系
 
-本项目的部分工具与提示词移植自旧版 Python/FastMCP 实现。该实现的**公开仓库为本账号的
-[MCP-Tools](https://github.com/SaigyoujiCTakuhei/MCP-Tools)**；本地 `MCP Server/v09–v11`
-各文件夹均是其检出（v10 与 v11 同为同一提交），本地另有未推送的迭代改动。本仓库的移植以
-本地检出状态为基线。
+本项目的部分工具与提示词移植自旧版 Python/FastMCP 实现。该实现的公开仓库为本账号的
+[MCP-Tools](https://github.com/SaigyoujiCTakuhei/MCP-Tools)，本地 `MCP Server/v09–v11`
+各文件夹均是其检出/迭代副本；其中 **v10 为上传到 GitHub 的最后版本**（与远端同步），
+v11 为其后的本地私有迭代、未上传。本仓库的移植以 v10 上传状态为基线。
 
 | 旧实现（MCP-Tools 检出，Python/FastMCP） | Rust 版 |
 |---|---|
