@@ -19,8 +19,8 @@
 | 提示词/资源 | 文件驱动（`mcp_data/prompts`、`mcp_data/resources`），热重载并经协议列出（`prompts/list`、`resources/list`） |
 | 输入校验 | JSON Schema（jsonschema crate，注册时预编译） |
 | 鉴权 | 可选 Bearer Token（config / 环境变量） |
-| WebUI | 工具卡片（单击筛选日志）、提示词/资源页签、重载/扫描新插件按钮、断连横幅、⏻ 关闭按钮（= 终端 Ctrl+C） |
-| 结构 | Cargo workspace：`server`（服务器）+ `tool_kit`（插件契约）+ `tools`（23 个插件二进制） |
+| WebUI | 工具卡片（单击筛选日志）、提示词/资源页签、⚡ 任务进展页签、重载/扫描按钮、RAW 多行审计日志、断连横幅与告别屏、⏻ 关闭按钮 |
+| 结构 | Cargo workspace：`server`（服务器）+ `tool_kit`（契约）+ `tools`（23 通用）+ `plugins/`（域插件） |
 
 ---
 
@@ -28,7 +28,7 @@
 
 ```
 New_Architecture_v00/
-├── Cargo.toml                 # workspace（members: server, tool_kit, tools）
+├── Cargo.toml                 # workspace（members: server, tool_kit, tools, plugins/*）
 ├── config.yaml                # 运行时配置（端口/鉴权/Origin 白名单/插件目录/超时/mcp 数据目录）
 ├── mcp_data/
 │   ├── prompts/               # 提示词（*.json 或带 YAML front matter 的 *.md，兼容 v10 Skills 格式）
@@ -36,6 +36,8 @@ New_Architecture_v00/
 ├── server/                    # 服务器本体
 │   └── src/
 │       ├── main.rs            # 入口：配置→插件发现→路由→浏览器→优雅关闭
+│       ├── tasks.rs           # 运行任务注册表（进展事件流）
+│       ├── watcher.rs         # 开发态源码监听（自动编译并热装载）
 │       ├── config.rs
 │       ├── executor/mod.rs    # ToolExecutor trait（子进程插件实现于 mcp/plugins.rs）
 │       ├── registry/
@@ -57,7 +59,7 @@ New_Architecture_v00/
 │   │   ├── src/config.rs         # 常量（对应 scripts/config.py）
 │   │   └── src/bin/              # kzm-sequentialthinking（对应 scripts/tool_register.py）
 │   └── memory/                # 长期记忆（PG + pgvector）：kzm-memory-{remember,recall,list,forget}
-├── 长期记忆功能方案.md          # memory 设计方案（P1 已按决策落地）
+│       └── src/bin/           # 另有 kzm-memory-import（批量导入）与 kzm-db-guide（库级指南）
 ```
 
 > **新增域插件**：在 `plugins/<域名>/` 建一个 crate（members 加一行），每个工具一个
@@ -91,6 +93,8 @@ curl -X POST http://127.0.0.1:58081/api/tools/hello_world/reload
 
 - **加载失败可见**：启动发现或重载时若工具无法唤起（二进制缺失/崩溃/输出非法），
   一律写 ERROR 日志（WebUI 实时可见），且不阻断服务器启动。
+- **源码监听**（`tools.watch: true` 时）：保存源码后自动编译并热装载对应工具——
+  上面的 ⟳ 重载按钮主要作为关闭监听时的手动兜底（侧车定义、脚本插件、失败补救）。
 - **新增工具**：在 `tools/src/bin/`（或 `plugins/<域>/src/bin/`）下用 `tool_kit::kzm_tool!`
   宏写一个新二进制 → `cargo build` → WebUI 点「🔍 扫描新插件」或
   `POST /api/tools/rescan` → 新工具立即登记并推送 `tools/list_changed`，全程无需重启。
@@ -134,7 +138,7 @@ curl -X POST http://127.0.0.1:58081/api/tools/hello_world/reload
 | `GET` | `/sse` | Legacy SSE 长流（首条 `endpoint` 事件 + 变更通知） |
 | `POST` | `/message?sessionId=xxx` | Legacy JSON-RPC（initialize 握手） |
 | `GET` | `/` | WebUI 管理面板 |
-| `GET/POST` | `/api/tools*`、`/api/prompts*`、`/api/resources*`、`/api/logs*` | Dashboard 私有 API |
+| `GET/POST` | `/api/tools*`、`/api/prompts*`、`/api/resources*`、`/api/tasks*`、`/api/logs*`、`/api/shutdown` | Dashboard 私有 API |
 
 WebUI：左侧「工具 / 提示词 / 资源」三页签；工具卡片**单击 = 日志按该工具筛选，再点/点筛选条取消**；
 右上横幅在日志流断开（服务器关闭）时显示「服务器已断开」。
@@ -191,7 +195,7 @@ cargo test                 # 单元测试
 config.yaml 查找顺序：exe 同目录 → 工作目录。关闭：Ctrl+C / SIGTERM 触发优雅排水，
 keep-alive 长连接最多拖延 10 秒后强制退出。
 
-## 10. 与 v10 (Playground) 的对应
+## 10. 与 v10 的对应
 
 | v10（Python, 147 工具 + 35 提示词） | Rust 版 |
 |---|---|
@@ -202,6 +206,7 @@ keep-alive 长连接最多拖延 10 秒后强制退出。
 | 工具加载失败可见 | ✅ ERROR 日志 |
 | pdf_reader（PyPDF2：pdf_read_local / pdf_read_url） | ✅ `plugins/pdf_reader/`（pdf-extract 纯 Rust），首个按功能分目录的域插件 |
 | sequential_thinking（thread_local 状态） | ✅ `plugins/sequential_thinking/`；状态改为显式 `sessionId` 句柄 + `mcp_data/sequential_thinking/` 持久化（MCP Stateful Tools 规范模式），thinking_core 纯库含 4 个单元测试 |
-| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用 dsh 记忆插件的 `memory_chunks` 表（PG 17 + pgvector HNSW，现 188 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
+| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用 dsh 记忆插件的 `memory_chunks` 表（PG 17 + pgvector HNSW，现 500+ 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
 | ai_bridge / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
+| ——（非移植，新增） | ✅ `db_guide`：库级内省指南（泛用设计，服务记忆与未来 RAG） |
 | python_eval / evolution / create_tool 等 Python 机制 | ➖ 不移植（Rust 编译期注册已替代其框架职责） |
