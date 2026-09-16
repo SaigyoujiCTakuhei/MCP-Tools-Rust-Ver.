@@ -11,3 +11,8 @@ mcp_data/sequential_thinking/
 .vscode/
 .idea/
 .DS_Store
+
+# 过程性档案（AI 会话记录/规划讨论存档）不入库——策展文档除外
+MCP Rust 实现计划讨论_完整会话.md
+MCP Rust 实现计划讨论与实现_01-14.md
+MCP 工具的 Rust 实现计划讨论.txt
