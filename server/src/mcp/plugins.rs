@@ -204,7 +204,7 @@ async fn run_mode(
 }
 
 /// 从目录列表发现插件：文件名以 kzm- 开头的可执行文件（去重，先到先得）
-fn find_plugin_binaries(dirs: &[PathBuf]) -> Vec<PathBuf> {
+pub fn find_plugin_binaries(dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     let mut binaries = Vec::new();
     for dir in dirs {

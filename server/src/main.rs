@@ -151,6 +151,38 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ========== 5. 发现并加载插件工具（失败 → ERROR 日志，不阻断启动） ==========
+    // 新机器/新克隆自愈：cargo server 只编译服务器包本身，工具成员的产物
+    // （target/*/kzm-*.exe）可能尚不存在——发现目录为空时先做一次全量编译。
+    if app_config.tools.watch
+        && mcp::plugins::find_plugin_binaries(&discovery_dirs).is_empty()
+        && PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|r| r.join("Cargo.toml").exists())
+            .unwrap_or(false)
+    {
+        info!("未发现任何工具产物，正在全量编译（cargo build --workspace）…首次约需数分钟");
+        logs.log("INFO", "未发现工具产物，正在全量编译（首次启动自愈）…").await;
+        let build = tokio::process::Command::new("cargo")
+            .args(["build", "--workspace"])
+            .current_dir(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from(".")),
+            )
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("全量编译启动失败")?;
+        if build.status.success() {
+            info!("全量编译完成");
+        } else {
+            tracing::warn!(
+                "全量编译失败（退出码 {}）",
+                build.status.code().unwrap_or(-1)
+            );
+        }
+    }
     let plugins = mcp::plugins::discover(&discovery_dirs, &logs, &state.tasks).await;
     for (binary, decl) in plugins {
         mcp::plugins::register_plugin(&state, binary, decl.clone());
