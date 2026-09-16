@@ -31,7 +31,7 @@ New_Architecture_v00/
 ├── Cargo.toml                 # workspace（members: server, tool_kit, tools, plugins/*）
 ├── config.yaml                # 运行时配置（端口/鉴权/Origin 白名单/插件目录/超时/mcp 数据目录）
 ├── mcp_data/
-│   ├── prompts/               # 提示词（*.json 或带 YAML front matter 的 *.md，兼容 v10 Skills 格式）
+│   ├── prompts/               # 提示词（*.json 或带 YAML front matter 的 *.md，Anthropic Skills 风格）
 │   └── resources/             # 资源（*.json；file 型资源每次读取最新内容）
 ├── server/                    # 服务器本体
 │   └── src/
@@ -50,14 +50,14 @@ New_Architecture_v00/
 │       └── dashboard/         # WebUI（api.rs + html.rs）
 ├── tool_kit/                  # 插件契约：ToolDecl / ToolOutput / kzm_tool! 宏
 ├── tools/src/bin/             # 23 个通用工具插件（kzm-*.rs，一个工具一个二进制）
-├── plugins/                   # 域插件目录（按功能一域一 crate，对应 v10 的 Lib/<模块>/）
-│   ├── pdf_reader/            # v10 pdf_reader 移植：pdf_read_local / pdf_read_url
-│   │   ├── src/pdf_utils.rs   # 公共函数（对应 v10 的 scripts/pdf_utils.py）
+├── plugins/                   # 域插件目录（按功能一域一 crate）
+│   ├── pdf_reader/            # PDF 文本提取：pdf_read_local / pdf_read_url
+│   │   ├── src/pdf_utils.rs   # 公共 PDF 处理函数
 │   │   └── src/bin/           # kzm-pdf-read-local、kzm-pdf-read-url
-│   ├── sequential_thinking/   # v10 sequential_thinking 移植：sequentialthinking（含状态）
-│   │   ├── src/thinking_core.rs  # 纯 def 库（对应 scripts/thinking_core.py，含单元测试）
-│   │   ├── src/config.rs         # 常量（对应 scripts/config.py）
-│   │   └── src/bin/              # kzm-sequentialthinking（对应 scripts/tool_register.py）
+│   ├── sequential_thinking/   # 序列化思考：sequentialthinking（含会话状态）
+│   │   ├── src/thinking_core.rs  # 思考状态机核心库（纯函数，含单元测试）
+│   │   ├── src/config.rs         # 常量
+│   │   └── src/bin/              # kzm-sequentialthinking 薄壳入口
 │   └── memory/                # 长期记忆（PG + pgvector）：kzm-memory-{remember,recall,list,forget}
 │       └── src/bin/           # 另有 kzm-memory-import（批量导入）与 kzm-db-guide（库级指南）
 ```
@@ -118,8 +118,8 @@ curl -X POST http://127.0.0.1:58081/api/tools/hello_world/reload
 }
 ```
 
-或 Markdown + YAML front matter（**兼容 v10 的 Anthropic Skills 格式**，`params` 即参数声明，
-正文为模板）——把 v10 `Lib/prompts/skills/*.md` 复制进来即可使用。
+或 Markdown + YAML front matter（**Anthropic Skills 风格**，`params` 即参数声明，
+正文为模板）——把技能 .md 文件复制进来即可使用。
 
 **资源**（`mcp_data/resources/*.json`）：`text` 内联内容或 `file` 相对路径
 （file 型资源每次 `resources/read` 都读磁盘最新内容，改文件即热更新）。
@@ -195,9 +195,14 @@ cargo test                 # 单元测试
 config.yaml 查找顺序：exe 同目录 → 工作目录。关闭：Ctrl+C / SIGTERM 触发优雅排水，
 keep-alive 长连接最多拖延 10 秒后强制退出。
 
-## 10. 与 v10 的对应
+## 10. 与旧版 Python 实现的关系
 
-| v10（Python, 147 工具 + 35 提示词） | Rust 版 |
+本项目的部分工具与提示词移植自旧版 Python/FastMCP 实现。该实现的**公开仓库为本账号的
+[MCP-Tools](https://github.com/SaigyoujiCTakuhei/MCP-Tools)**；本地 `MCP Server/v09–v11`
+各文件夹均是其检出（v10 与 v11 同为同一提交），本地另有未推送的迭代改动。本仓库的移植以
+本地检出状态为基线。
+
+| 旧实现（MCP-Tools 检出，Python/FastMCP） | Rust 版 |
 |---|---|
 | 基础通用工具（Lib/tools/scripts 同名项） | ✅ 23 个插件，全部热重载 |
 | 文件夹自动发现工具 | ✅ kzm-* 自动发现 + 重载 + 手动扫描新插件 |
@@ -206,7 +211,10 @@ keep-alive 长连接最多拖延 10 秒后强制退出。
 | 工具加载失败可见 | ✅ ERROR 日志 |
 | pdf_reader（PyPDF2：pdf_read_local / pdf_read_url） | ✅ `plugins/pdf_reader/`（pdf-extract 纯 Rust），首个按功能分目录的域插件 |
 | sequential_thinking（thread_local 状态） | ✅ `plugins/sequential_thinking/`；状态改为显式 `sessionId` 句柄 + `mcp_data/sequential_thinking/` 持久化（MCP Stateful Tools 规范模式），thinking_core 纯库含 4 个单元测试 |
-| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/` P1：`memory_remember/recall/list/forget`，复用 dsh 记忆插件的 `memory_chunks` 表（PG 17 + pgvector HNSW，现 500+ 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
-| ai_bridge / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
+| memory（长期记忆，Markdown+ChromaDB） | ✅ `plugins/memory/`：`memory_remember/recall/list/forget` + `db_guide`，复用 dsh 记忆插件的 `memory_chunks` 表（PG 17 + pgvector HNSW，500+ 条存量），本地 bge-small-zh-v1.5 嵌入（CLS 池化，与存量向量完全兼容，同文重嵌入 score=1.0）；P2/P3（api 嵌入、混合检索、自动提炼）见方案文档 |
 | ——（非移植，新增） | ✅ `db_guide`：库级内省指南（泛用设计，服务记忆与未来 RAG） |
+| ai_bridge / netease / fanqie | ⏳ 后续按需以 `plugins/<域>/` 插件形式移植 |
 | python_eval / evolution / create_tool 等 Python 机制 | ➖ 不移植（Rust 编译期注册已替代其框架职责） |
+
+> 旧实现的最新迭代（含 147 工具注册与 35 个提示词模板的完整形态）保留在本地检出、未推送；
+> 本仓库不引用其内部文件夹名。
