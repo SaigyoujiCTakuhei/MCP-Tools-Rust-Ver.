@@ -364,6 +364,8 @@ fn server_discover() -> Value {
             "resources": {},
         },
         "instructions": "通用工具集（子进程插件，热重载）：文件/目录操作、Shell 执行、网络抓取与搜索、Git、文本处理与统计；另提供文件驱动的提示词与资源。用 tools/list、prompts/list、resources/list 获取完整清单。",
+        "ttlMs": LIST_CACHE_TTL_MS,
+        "cacheScope": "public",
     })
 }
 
@@ -388,7 +390,12 @@ async fn tools_list(state: &AppState, params: &Value) -> Result<Value, RpcError>
         .map(|d| d.to_mcp_tool_json())
         .collect();
     let end = (start + TOOLS_PAGE_SIZE).min(tools.len());
-    let mut result = json!({ "tools": tools.get(start..end).unwrap_or(&[]) });
+    // SEP-2549：列表结果 MUST 携带缓存提示；工具列表对所有调用者一致 → public
+    let mut result = json!({
+        "tools": tools.get(start..end).unwrap_or(&[]),
+        "ttlMs": LIST_CACHE_TTL_MS,
+        "cacheScope": "public",
+    });
     if end < tools.len() {
         result["nextCursor"] = json!(end.to_string());
     }
@@ -531,7 +538,11 @@ async fn prompts_list(state: &AppState) -> Result<Value, RpcError> {
             p
         })
         .collect();
-    Ok(json!({ "prompts": prompts }))
+    Ok(json!({
+        "prompts": prompts,
+        "ttlMs": LIST_CACHE_TTL_MS,
+        "cacheScope": "public",
+    }))
 }
 
 async fn prompts_get(state: &AppState, params: &Value) -> Result<Value, RpcError> {
@@ -549,7 +560,11 @@ async fn prompts_get(state: &AppState, params: &Value) -> Result<Value, RpcError
 
 async fn resources_list(state: &AppState) -> Result<Value, RpcError> {
     let resources = state.resources.list().await;
-    Ok(json!({ "resources": resources }))
+    Ok(json!({
+        "resources": resources,
+        "ttlMs": LIST_CACHE_TTL_MS,
+        "cacheScope": "public",
+    }))
 }
 
 async fn resources_read(state: &AppState, params: &Value) -> Result<Value, RpcError> {
@@ -562,7 +577,12 @@ async fn resources_read(state: &AppState, params: &Value) -> Result<Value, RpcEr
         .read(uri)
         .await
         .map_err(|e| RpcError::new(ERR_INVALID_PARAMS, format!("{e:#}")))?;
-    Ok(json!({ "contents": [contents] }))
+    // 资源内容可能因文件更新而变，private + 0（即时过期）= 保持每次都取最新的行为
+    Ok(json!({
+        "contents": [contents],
+        "ttlMs": 0,
+        "cacheScope": "private",
+    }))
 }
 
 // ==================== 响应信封 ====================
@@ -577,6 +597,10 @@ pub fn finalize_result(mut result: Value) -> Value {
     obj.insert("_meta".into(), server_info_meta());
     result
 }
+
+/// SEP-2549 列表结果缓存时长：列表仅随热重载变化，且本服务器发 listChanged 通知
+/// 即时失效，TTL 只是两次通知之间的省流提示（5 分钟与规范示例一致）。
+const LIST_CACHE_TTL_MS: i64 = 300_000;
 
 fn server_info_meta() -> Value {
     json!({
