@@ -443,13 +443,13 @@ function switchRight(tab) {
   document.getElementById('rtabBoard').classList.toggle('rtab-active', isBoard);
   if (isBoard) {
     boardOpen = true;
+    ensureAutoTimer();
     loadBoard();
     return;
   }
   boardOpen = false;
   boardDetailId = null;
-  if (boardAutoTimer) { clearInterval(boardAutoTimer); boardAutoTimer = null; }
-  boardAutoOn = false;
+  if (boardAutoTimer) { clearInterval(boardAutoTimer); boardAutoTimer = null; }  // 只停表；偏好本身持久化保留
   if (tab === 'tasks') {
     fetchTasks();
     if (!taskEs || taskEs.readyState === 2) openTaskStream();
@@ -575,8 +575,10 @@ function connectLogStream() {
 
 let boardOpen = false;
 let boardAutoTimer = null;
-let boardAutoOn = false;        // 勾选状态独立保存：列表重渲染（innerHTML 重建）后恢复
+let boardAutoOn = true;         // 自动刷新偏好（持久化存储；缺省=开，09-28 拍板默认勾选）
 let boardDetailId = null;       // 非空 = 二级下钻中
+let boardData = [];             // 最近一次会话列表（折叠切换重渲染时免重新拉取）
+let boardSectionsOpen = {};     // 看板分栏展开状态（key→bool，undefined=展开；跨重渲染保留）
 const BOARD_SWITCH_RATIO = 0.9; // 换会话线 = 压缩触发线 × 0.9（v1 常量：换会话应发生在压缩前）
 
 function fmtTok(n) {
@@ -618,7 +620,8 @@ async function loadBoard() {
   try {
     const res = await fetch('/api/ctx/sessions');
     if (!res.ok) throw new Error(await res.text());
-    renderBoardList(await res.json());
+    boardData = await res.json();
+    renderBoardList(boardData);
   } catch (e) {
     area.innerHTML = '<div class="empty-state">看板加载失败: ' + escapeHtml(e.message) + '</div>';
   }
@@ -666,33 +669,81 @@ function sessionCard(s) {
   </div>`;
 }
 
+// 分栏折叠状态持久化（localStorage，同浏览器跨会话记忆；存储不可用时静默降级为页面内记忆）
+const BOARD_SECTION_KEY = 'kzm_board_sections';
+function loadBoardSections() {
+  try { boardSectionsOpen = JSON.parse(localStorage.getItem(BOARD_SECTION_KEY)) || {}; } catch (e) { boardSectionsOpen = {}; }
+}
+function saveBoardSections() {
+  try { localStorage.setItem(BOARD_SECTION_KEY, JSON.stringify(boardSectionsOpen)); } catch (e) {}
+}
+
+// 自动刷新偏好持久化（'1'/'0'；缺省=开，09-28 拍板默认勾选）。定时器跟随「看板打开 && 偏好开」：
+// 离开看板只停表，不清偏好——下次进来按记忆恢复
+const BOARD_AUTO_KEY = 'kzm_board_autorefresh';
+function loadBoardAuto() {
+  try {
+    const v = localStorage.getItem(BOARD_AUTO_KEY);
+    boardAutoOn = v === null ? true : v === '1';
+  } catch (e) { boardAutoOn = true; }
+}
+function saveBoardAuto() {
+  try { localStorage.setItem(BOARD_AUTO_KEY, boardAutoOn ? '1' : '0'); } catch (e) {}
+}
+function ensureAutoTimer() {
+  if (boardAutoOn && boardOpen && !boardAutoTimer) {
+    boardAutoTimer = setInterval(() => { if (boardOpen && connected) loadBoard(); }, 30000);
+  } else if ((!boardAutoOn || !boardOpen) && boardAutoTimer) {
+    clearInterval(boardAutoTimer); boardAutoTimer = null;
+  }
+}
+
+// 分栏可折叠标题（复用工具分组的 ▼/▶ 交互；undefined=展开，跨重渲染保留）
+function toggleSection(key) {
+  boardSectionsOpen[key] = (boardSectionsOpen[key] === false);
+  saveBoardSections();
+  renderBoardList(boardData);   // 翻完状态必须重渲染，否则 DOM 不动（09-28 验收抓到的漏渲染 bug）
+}
+
+function sectionHtml(key, label, cards) {
+  if (!cards.length) return '';
+  const open = boardSectionsOpen[key] !== false;
+  return `
+    <div class="group-header" onclick="toggleSection('${key}')">
+      <span class="arrow">${open ? '▼' : '▶'}</span> ${label}
+      <span class="group-count">(${cards.length})</span>
+    </div>
+    ${open ? cards.map(sessionCard).join('') : ''}
+  `;
+}
+
 function renderBoardList(sessions) {
-  // 三栏分流：壳侧 archived/deleted 的会话移出主列表，单独成「已归档/已删除」栏
-  const gone = sessions.filter(s => s.archived || s.deleted);
+  // 四栏分流：活跃主会话 / 子代理 / 已归档 / 已删除（壳侧 archived+deleted 软标记，各栏可折叠）
+  const goneDel = sessions.filter(s => s.deleted);
+  const goneArch = sessions.filter(s => s.archived && !s.deleted);
   const live = sessions.filter(s => !s.archived && !s.deleted);
   const main = live.filter(s => !s.subagent);
   const subs = live.filter(s => s.subagent);
+  const goneTxt = `${goneArch.length ? ` + ${goneArch.length} 已归档` : ''}${goneDel.length ? ` + ${goneDel.length} 已删除` : ''}`;
   document.getElementById('boardArea').innerHTML = `
     <div class="btoolbar">
-      <span style="font-weight:600">会话上下文总览（本机 ZCode · ${main.length} 主 + ${subs.length} 子代理${gone.length ? ` + ${gone.length} 已归档/删除` : ''}）</span>
+      <span style="font-weight:600">会话上下文总览（本机 ZCode · ${main.length} 主 + ${subs.length} 子代理${goneTxt}）</span>
       <label style="font-size:12px;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="boardAuto" ${boardAutoOn ? 'checked' : ''} onchange="toggleBoardAuto()"> 自动刷新 30s</label>
       <button class="btn" onclick="loadBoard()">🔄 刷新</button>
       <span style="font-size:11px;color:var(--text-muted)">积分 = 官方系数 × 时段乘数的本地估算，非权威账单；配额余量在服务端（v2 接入）</span>
     </div>
-    ${main.map(sessionCard).join('') || '<div class="empty-state">无会话</div>'}
-    ${subs.length ? `<div class="bsection">子代理会话（${subs.length}）</div>` + subs.map(sessionCard).join('') : ''}
-    ${gone.length ? `<div class="bsection">已归档 / 已删除（客户端列表已移除，本地副本与流水仍在）· ${gone.length}</div>` + gone.map(sessionCard).join('') : ''}
+    ${sectionHtml('main', '活跃主会话', main) || '<div class="empty-state">无会话</div>'}
+    ${sectionHtml('subs', '子代理会话', subs)}
+    ${sectionHtml('archived', '已归档（客户端列表已移除，本地副本与流水仍在）', goneArch)}
+    ${sectionHtml('deleted', '已删除（客户端列表已移除，本地副本与流水仍在）', goneDel)}
   `;
 }
 
 function toggleBoardAuto() {
   boardAutoOn = document.getElementById('boardAuto').checked;
-  if (boardAutoOn && !boardAutoTimer) {
-    boardAutoTimer = setInterval(() => { if (boardOpen && connected) loadBoard(); }, 30000);
-    loadBoard();
-  } else if (!boardAutoOn && boardAutoTimer) {
-    clearInterval(boardAutoTimer); boardAutoTimer = null;
-  }
+  saveBoardAuto();
+  ensureAutoTimer();
+  if (boardAutoOn) loadBoard();
 }
 
 async function openSession(id, keepScroll) {
@@ -794,6 +845,8 @@ function renderDetail(d) {
 refreshTools();
 loadLogs();
 connectLogStream();
+loadBoardSections();
+loadBoardAuto();
 // 深链：/?board=1 直接进入看板（书签直达 / 自动化自检用）
 if (new URLSearchParams(location.search).has('board')) openBoard();
 </script>
