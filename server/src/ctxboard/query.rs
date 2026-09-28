@@ -53,9 +53,15 @@ pub struct BoardSession {
     pub archived: bool,
     /// 壳侧 tasks.deleted=1（客户端里明确删除，本地副本仍在）
     pub deleted: bool,
-    /// 子代理会话（session.parent_id 非空）
+    /// 子代理会话（task_type = subagent_child / workflow_child；
+    /// fork 与划词侧聊虽带 parent_id，但它们是客户端列表里的独立会话，归主会话）
     pub subagent: bool,
-    /// 当前上下文 = 最新请求 input_tokens（含缓存命中，与客户端「上下文容量」同口径）；无请求记录时为 null
+    /// 客户端列表是否包含此会话（壳侧 tasks 表有行；false=侧聊等引擎单侧会话，客户端列表永不显示）
+    pub in_client_list: bool,
+    /// 引擎库 session.task_type 原值（interactive / fork / selection_side_chat / …）
+    pub task_type: String,
+    /// 当前上下文 = 最新一条成功请求的 input_tokens（含缓存命中，与客户端「上下文容量」同口径）；
+    /// 失败请求记 0 不倒灌（2026-09-28 绝区零会话死循环尾部 4 条 unknown_error 曾把卡片打成 0.0万）；无成功请求时为 None
     pub context_tokens: Option<i64>,
     pub model: Option<String>,
     pub provider_id: Option<String>,
@@ -198,6 +204,7 @@ fn open_db() -> anyhow::Result<Connection> {
 }
 
 /// model_usage 行（聚合 / 曲线 / 计费共用的最小集）
+#[derive(Clone)]
 struct UsageRow {
     session_id: String,
     turn_id: String,
@@ -240,18 +247,34 @@ fn load_usage_rows(conn: &Connection) -> anyhow::Result<Vec<UsageRow>> {
 
 // ==================== 一级：会话总览 ====================
 
-/// 桌面壳会话软标记（tasks-index.sqlite 的 tasks 表）：archived / deleted。
+/// 该行是否比已记录的最新行新（含「尚无记录」）
+fn newer(prev: &Option<UsageRow>, started_at_ms: i64) -> bool {
+    match prev {
+        Some(p) => p.started_at_ms < started_at_ms,
+        None => true,
+    }
+}
+
+/// 桌面壳会话软标记（tasks-index.sqlite 的 tasks 表）：archived / deleted，
+/// 以及「壳侧是否见过这个会话」的全量 id 集——侧聊等会话在壳侧根本没有行，
+/// 客户端列表永远不显示它们，看板据此打「列表外」标注。
 /// 客户端的「存档/删除」只写壳侧标记，引擎库行与流水原样保留（=本地副本）；
 /// 引擎库 session.time_archived 在本部署恒为 NULL，真标记在壳侧。
-/// 文件缺失/表结构变化时返回空集（全部按活跃处理，功能降级不报错）。
-fn load_shell_marks() -> HashMap<String, (bool, bool)> {
+/// 文件缺失/表结构变化时 available=false（全部按活跃处理，功能降级不报错）。
+struct ShellIndex {
+    marks: HashMap<String, (bool, bool)>,
+    known: std::collections::HashSet<String>,
+    available: bool,
+}
+
+fn load_shell_index() -> ShellIndex {
     let path = expand_home(&cfg().tasks_index_path);
-    let mut map = HashMap::new();
+    let mut idx = ShellIndex { marks: HashMap::new(), known: std::collections::HashSet::new(), available: false };
     let Ok(conn) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
-        return map;
+        return idx;
     };
     let Ok(mut stmt) = conn.prepare("SELECT task_id, deleted, archived FROM tasks") else {
-        return map;
+        return idx;
     };
     if let Ok(rows) = stmt.query_map([], |r| {
         Ok((
@@ -260,49 +283,44 @@ fn load_shell_marks() -> HashMap<String, (bool, bool)> {
             r.get::<_, i64>(2)?,
         ))
     }) {
+        idx.available = true;
         for (task_id, deleted, archived) in rows.flatten() {
-            map.insert(task_id, (deleted != 0, archived != 0));
+            idx.known.insert(task_id.clone());
+            idx.marks.insert(task_id, (deleted != 0, archived != 0));
         }
     }
-    map
+    idx
 }
 
 pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
     let conn = open_db()?;
     let usage = load_usage_rows(&conn)?;
-    let shell_marks = load_shell_marks();
+    let shell = load_shell_index();
 
-    // 每会话一遍聚合；第 6 项 = 最新一条请求（上下文口径）
-    let mut agg: HashMap<String, (i64, i64, i64, i64, f64, Option<UsageRow>)> = HashMap::new();
+    // 每会话一遍聚合；第 6/7 项 = 最新一条请求 / 最新一条成功请求（上下文口径只认后者）
+    let mut agg: HashMap<String, (i64, i64, i64, i64, f64, Option<UsageRow>, Option<UsageRow>)> =
+        HashMap::new();
     for r in &usage {
         let e = agg
             .entry(r.session_id.clone())
-            .or_insert_with(|| (0, 0, 0, 0, 0.0, None));
+            .or_insert_with(|| (0, 0, 0, 0, 0.0, None, None));
         e.0 += 1;
         e.1 += r.input;
         e.2 += r.output;
         e.3 += r.cache_read;
         e.4 += row_points(&r.model_id, r.input, r.output, r.cache_read, r.cache_creation, r.started_at_ms);
-        match &e.5 {
-            Some(prev) if prev.started_at_ms >= r.started_at_ms => {}
-            _ => e.5 = Some(UsageRow {
-                session_id: r.session_id.clone(),
-                turn_id: r.turn_id.clone(),
-                model_id: r.model_id.clone(),
-                provider_id: r.provider_id.clone(),
-                input: r.input,
-                output: r.output,
-                cache_read: r.cache_read,
-                cache_creation: r.cache_creation,
-                started_at_ms: r.started_at_ms,
-                agent: r.agent.clone(),
-            }),
+        if newer(&e.5, r.started_at_ms) {
+            e.5 = Some(r.clone());
+        }
+        // input=0 = 失败请求（引擎对 error 请求记 0），不能代表当前上下文
+        if r.input > 0 && newer(&e.6, r.started_at_ms) {
+            e.6 = Some(r.clone());
         }
     }
 
     let mut stmt = conn.prepare(
         "SELECT id, COALESCE(title,''), COALESCE(time_updated,0), \
-                COALESCE(time_compacting,0), time_archived IS NOT NULL, parent_id IS NOT NULL \
+                COALESCE(time_compacting,0), time_archived IS NOT NULL, COALESCE(task_type,'') \
          FROM session ORDER BY time_updated DESC",
     )?;
     let rows = stmt
@@ -313,24 +331,29 @@ pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
                 r.get::<_, i64>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, bool>(4)?,
-                r.get::<_, bool>(5)?,
+                r.get::<_, String>(5)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut out = Vec::with_capacity(rows.len());
-    for (sid, title, updated, compacting, _engine_archived, subagent) in rows {
-        let (req_count, total_input, total_output, total_cache_read, points, latest) =
+    for (sid, title, updated, compacting, _engine_archived, task_type) in rows {
+        // fork / 划词侧聊是客户端列表里的独立会话，与 interactive 同列主会话；
+        // 只有 task_type 明确为 child 的才算子代理（曾按 parent_id 判定，fork 因此被错分进子代理栏）
+        let subagent = matches!(task_type.as_str(), "subagent_child" | "workflow_child");
+        let (req_count, total_input, total_output, total_cache_read, points, _latest_any, latest_ok) =
             agg.remove(&sid).unwrap_or_default();
-        let model = latest.as_ref().map(|l| l.model_id.clone());
+        let model = latest_ok.as_ref().map(|l| l.model_id.clone());
         let mctx = model_ctx(model.as_deref().unwrap_or(""));
-        let trigger = latest
+        let trigger = latest_ok
             .as_ref()
             .map(|_| mctx.context_window - mctx.max_output.min(21_000) - 13_000);
         // 存档/删除以壳侧标记为准（引擎列恒空）；engine archived 仅作兜底或
-        let (shell_deleted, shell_archived) = shell_marks.get(&sid).copied().unwrap_or((false, false));
+        let (shell_deleted, shell_archived) = shell.marks.get(&sid).copied().unwrap_or((false, false));
+        // 壳侧索引可用时，「没见过」= 客户端列表不显示（侧聊/未入索引擎会话）
+        let in_client_list = !shell.available || shell.known.contains(&sid);
         out.push(BoardSession {
-            context_tokens: latest.as_ref().map(|l| l.input),
+            context_tokens: latest_ok.as_ref().map(|l| l.input),
             trigger_tokens: trigger,
             context_window: mctx.context_window,
             session_id: sid,
@@ -338,9 +361,11 @@ pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
             time_updated_ms: updated,
             archived: shell_archived,
             deleted: shell_deleted,
+            in_client_list,
             subagent,
+            task_type,
             model,
-            provider_id: latest.as_ref().map(|l| l.provider_id.clone()),
+            provider_id: latest_ok.as_ref().map(|l| l.provider_id.clone()),
             time_compacting_ms: (compacting > 0).then_some(compacting),
             points_estimate: points,
             total_input_tokens: total_input,
@@ -382,12 +407,15 @@ pub fn session_detail(session_id: &str) -> anyhow::Result<SessionDetail> {
             r.cache_creation,
             r.started_at_ms,
         );
-        curve.push(CurvePoint {
-            t_ms: r.started_at_ms,
-            input_tokens: r.input,
-            agent: r.agent,
-            turn_id: r.turn_id.clone(),
-        });
+        // 失败请求（input=0）只进计费，不进曲线——画成 0 点会造出假悬崖
+        if r.input > 0 {
+            curve.push(CurvePoint {
+                t_ms: r.started_at_ms,
+                input_tokens: r.input,
+                agent: r.agent,
+                turn_id: r.turn_id.clone(),
+            });
+        }
     }
     curve.sort_by_key(|p| p.t_ms);
 
@@ -434,10 +462,11 @@ pub fn session_detail(session_id: &str) -> anyhow::Result<SessionDetail> {
         .ok()
         .flatten();
 
-    // 最新模型（参考线参数来源）
+    // 最新模型（参考线参数来源；同上只认成功请求）
     let model = conn
         .prepare(
             "SELECT model_id FROM model_usage WHERE session_id=?1 AND model_id IS NOT NULL \
+             AND COALESCE(input_tokens,0) > 0 \
              ORDER BY started_at DESC, id DESC LIMIT 1",
         )?
         .query_row([session_id], |r| r.get::<_, String>(0))

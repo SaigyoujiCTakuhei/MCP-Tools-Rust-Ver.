@@ -388,6 +388,8 @@ async function refreshResources() {
 // ============ 日志（需求三：按工具筛选） ============
 
 function toggleFilter(name) {
+  // 看板打开时点工具卡：先退出看板回日志，否则筛选发生在被遮住的日志页里，点击像没响应
+  if (rightTab === 'board') switchRight('logs');
   currentFilter = (currentFilter === name) ? null : name;
   document.getElementById('filterChip').style.display = currentFilter ? '' : 'none';
   if (currentTab === 'tools') renderTools();
@@ -671,6 +673,9 @@ function sessionCard(s) {
       ${compactChip}
       ${s.deleted ? '<span class="bchip gone">已删除</span>' : s.archived ? '<span class="bchip warn">已归档</span>' : ''}
       ${!s.deleted && !s.archived && s.subagent ? '<span class="bchip">子代理</span>' : ''}
+      ${!s.deleted && !s.archived && s.task_type === 'fork' ? '<span class="bchip">fork</span>' : ''}
+      ${!s.deleted && !s.archived && s.task_type === 'selection_side_chat' ? '<span class="bchip">侧聊</span>' : ''}
+      ${!s.deleted && !s.archived && !s.in_client_list ? '<span class="bchip warn" title="引擎库里有这个会话，但壳侧会话索引（客户端列表的数据源）没有它的条目——侧聊等会话客户端列表从不显示，仅引擎侧存在">列表外</span>' : ''}
     </div>
     <div class="ctxrow">
       ${ctxTxt}
@@ -733,9 +738,9 @@ function toggleSection(key) {
   renderBoardList(boardData);   // 翻完状态必须重渲染，否则 DOM 不动（09-28 验收抓到的漏渲染 bug）
 }
 
-function sectionHtml(key, label, cards) {
+function sectionHtml(key, label, cards, defaultOpen = true) {
   if (!cards.length) return '';
-  const open = boardSectionsOpen[key] !== false;
+  const open = boardSectionsOpen[key] ?? defaultOpen;
   return `
     <div class="group-header" onclick="toggleSection('${key}')">
       <span class="arrow">${open ? '▼' : '▶'}</span> ${label}
@@ -746,13 +751,17 @@ function sectionHtml(key, label, cards) {
 }
 
 function renderBoardList(sessions) {
-  // 四栏分流：活跃主会话 / 子代理 / 已归档 / 已删除（壳侧 archived+deleted 软标记，各栏可折叠）
+  // 五栏分流：活跃主会话 / 列表外 / 子代理 / 已归档 / 已删除（壳侧 archived+deleted 软标记，各栏可折叠）
   const goneDel = sessions.filter(s => s.deleted);
   const goneArch = sessions.filter(s => s.archived && !s.deleted);
   const live = sessions.filter(s => !s.archived && !s.deleted);
-  const main = live.filter(s => !s.subagent);
+  const mainAll = live.filter(s => !s.subagent);
+  // 列表外 = 引擎里有、壳侧索引没条目（划词侧聊等）——客户端列表永不显示，也永远无法从客户端归档/删除，
+  // 只会随使用缓慢堆积，单独成栏默认收起，不挤占主会话栏
+  const outside = mainAll.filter(s => !s.in_client_list);
+  const main = mainAll.filter(s => s.in_client_list);
   const subs = live.filter(s => s.subagent);
-  const goneTxt = `${goneArch.length ? ` + ${goneArch.length} 已归档` : ''}${goneDel.length ? ` + ${goneDel.length} 已删除` : ''}`;
+  const goneTxt = `${outside.length ? ` + ${outside.length} 列表外` : ''}${goneArch.length ? ` + ${goneArch.length} 已归档` : ''}${goneDel.length ? ` + ${goneDel.length} 已删除` : ''}`;
   document.getElementById('boardArea').innerHTML = `
     <div class="btoolbar">
       <span style="font-weight:600">会话上下文总览（本机 ZCode · ${main.length} 主 + ${subs.length} 子代理${goneTxt}）</span>
@@ -761,6 +770,7 @@ function renderBoardList(sessions) {
       <span style="font-size:11px;color:var(--text-muted)">积分 = 官方系数 × 时段乘数的本地估算，非权威账单；配额余量在服务端（v2 接入）</span>
     </div>
     ${sectionHtml('main', '活跃主会话', main) || '<div class="empty-state">无会话</div>'}
+    ${sectionHtml('outside', '列表外会话（引擎在、客户端列表不显示：划词侧聊等）', outside, false)}
     ${sectionHtml('subs', '子代理会话', subs)}
     ${sectionHtml('archived', '已归档（客户端列表已移除，本地副本与流水仍在）', goneArch)}
     ${sectionHtml('deleted', '已删除（客户端列表已移除，本地副本与流水仍在）', goneDel)}
