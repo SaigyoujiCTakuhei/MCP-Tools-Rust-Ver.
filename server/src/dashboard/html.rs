@@ -15,7 +15,7 @@ pub fn dashboard_html() -> &'static str {
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
     --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --red: #f85149; --yellow: #d29922;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #a371f7;
   }
   body { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
   #banner { display: none; background: var(--red); color: #fff; text-align: center; padding: 8px 16px; font-size: 13px; font-weight: 600; }
@@ -105,10 +105,12 @@ pub fn dashboard_html() -> &'static str {
   .bsection { margin: 16px 0 6px; font-weight: 600; color: var(--text-muted); }
   .ctxrow { display: flex; align-items: baseline; gap: 12px; font-size: 12px; flex-wrap: wrap; }
   .ctxbar { position: relative; height: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin: 8px 0 3px; }
-  .ctxbar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px 0 0 6px; opacity: .7; }
-  .ctxbar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; }
+  .ctxbar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px 0 0 6px; opacity: .7; z-index: 1; }
+  .ctxbar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; z-index: 2; }
   .ctxbar .tick.trigger { background: var(--red); }
   .ctxbar .tick.switchline { background: var(--accent); }
+  .ctxbar .tick.y { background: var(--yellow); }
+  .ctxbar .tick.p { background: var(--purple); }
   .ctxlegend { font-size: 10px; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap; }
   .btoolbar { position: sticky; top: 0; z-index: 5; background: var(--bg); display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 0; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
   .btable { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
@@ -117,6 +119,25 @@ pub fn dashboard_html() -> &'static str {
   .btable tbody tr:hover td { background: rgba(88,166,255,.05); }
   .curve-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0 12px; }
   .status-chip { font-size: 10px; padding: 1px 6px; border-radius: 4px; }
+  /* 图例悬停气泡：hover 显示 data-tip 内容，向上弹出 */
+  .tip { position: relative; cursor: help; }
+  .tip::after {
+    content: attr(data-tip);
+    position: absolute; left: 0; bottom: calc(100% + 7px);
+    background: #1c2128; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-size: 11px; line-height: 1.7;
+    width: max-content; max-width: 340px; white-space: normal; text-align: left;
+    box-shadow: 0 4px 12px rgba(0,0,0,.5);
+    opacity: 0; visibility: hidden; transition: opacity .12s;
+    z-index: 20; pointer-events: none;
+  }
+  .tip::before {
+    content: ''; position: absolute; left: 8px; bottom: calc(100% + 2px);
+    border: 5px solid transparent; border-top-color: var(--border);
+    opacity: 0; visibility: hidden; transition: opacity .12s; z-index: 21; pointer-events: none;
+  }
+  .tip:hover::after, .tip:hover::before { opacity: 1; visibility: visible; }
   .st-completed { background: rgba(63,185,80,.2); color: var(--green); }
   .st-cancelled { background: rgba(210,153,34,.2); color: var(--yellow); }
   .st-error { background: rgba(248,81,73,.2); color: var(--red); }
@@ -579,7 +600,7 @@ let boardAutoOn = true;         // 自动刷新偏好（持久化存储；缺省
 let boardDetailId = null;       // 非空 = 二级下钻中
 let boardData = [];             // 最近一次会话列表（折叠切换重渲染时免重新拉取）
 let boardSectionsOpen = {};     // 看板分栏展开状态（key→bool，undefined=展开；跨重渲染保留）
-const BOARD_SWITCH_RATIO = 0.9; // 换会话线 = 压缩触发线 × 0.9（v1 常量：换会话应发生在压缩前）
+const BOARD_SWITCH_RATIO = 0.9; // 压缩预警线 = 压缩触发线 × 0.9（防引擎自动压缩重写历史的最后通牒）；换会话建议线 = 换会话线 40万
 
 function fmtTok(n) {
   if (n === null || n === undefined) return '—';
@@ -607,7 +628,7 @@ function planName(p) {
 }
 function zoneColor(ctx) {
   if (ctx === null || ctx === undefined) return 'var(--text-muted)';
-  if (ctx > 400000) return 'var(--red)';
+  if (ctx > 400000) return 'var(--purple)';
   if (ctx > 200000) return 'var(--yellow)';
   return 'var(--green)';
 }
@@ -632,6 +653,10 @@ function sessionCard(s) {
   const trig = s.trigger_tokens;
   const win = s.context_window || 1000000;
   const swLine = trig ? Math.round(trig * BOARD_SWITCH_RATIO) : null;
+  const p20 = (200000 / win * 100).toFixed(2);
+  const p40 = (400000 / win * 100).toFixed(2);
+  const swPct = swLine ? (swLine / win * 100).toFixed(2) : 0;
+  const trPct = trig ? (trig / win * 100).toFixed(2) : 0;
   const ctxTxt = (ctx === null || ctx === undefined)
     ? '<span style="color:var(--text-muted)">无请求数据</span>'
     : `<b style="color:${zoneColor(ctx)}">${fmtTok(ctx)}</b> / 触发线 ${fmtTok(trig)}（${trig ? (ctx / trig * 100).toFixed(1) : '—'}%）`;
@@ -654,16 +679,19 @@ function sessionCard(s) {
       <span>${s.request_count} 次请求</span>
     </div>
     ${(ctx !== null && trig) ? `
-    <div class="ctxbar">
+    <div class="ctxbar" style="background:linear-gradient(to right, rgba(63,185,80,.10) 0 ${p20}%, rgba(210,153,34,.12) ${p20}% ${p40}%, rgba(163,113,247,.10) ${p40}% ${swPct}%, rgba(88,166,255,.14) ${swPct}% ${trPct}%, rgba(248,81,73,.10) ${trPct}% 100%), var(--surface)">
       <div class="fill" style="width:${fillW}%;background:${zoneColor(ctx)}"></div>
-      <div class="tick switchline" style="left:${(swLine / win * 100).toFixed(2)}%" title="换会话线 ${fmtTok(swLine)}"></div>
-      <div class="tick trigger" style="left:${(trig / win * 100).toFixed(2)}%" title="压缩触发线 ${fmtTok(trig)}"></div>
+      <div class="tick y" style="left:${p20}%" title="涣散线 20万（绿黄交界）"></div>
+      <div class="tick p" style="left:${p40}%" title="换会话线 40万（黄紫交界）"></div>
+      <div class="tick switchline" style="left:${swPct}%" title="压缩预警线 ${fmtTok(swLine)}"></div>
+      <div class="tick trigger" style="left:${trPct}%" title="压缩触发线 ${fmtTok(trig)}"></div>
     </div>
     <div class="ctxlegend">
-      <span>窗口 ${fmtTok(win)}</span>
-      <span style="color:var(--accent)">▎换会话线 ${fmtTok(swLine)}</span>
-      <span style="color:var(--red)">▎压缩触发线 ${fmtTok(trig)}</span>
-      <span style="color:var(--yellow)">▎危险带 40万</span>
+      <span class="tip" data-tip="模型上下文窗口总容量。四根线与填充色的百分比都以它为分母。">窗口 ${fmtTok(win)}</span>
+      <span class="tip" style="color:var(--yellow)" data-tip="质量带边界：进入 20–40 万涣散带（黄区）的起点。此后模型注意力开始下滑、长程检索与多步推理变弱。外推经验值，非官方标准。">▎涣散线 20万</span>
+      <span class="tip" style="color:var(--purple)" data-tip="换会话建议点：40 万起为高危区（紫区）。按换会话纪律，应在此线附近主动开新会话，避免在涣散状态下继续堆积上下文。">▎换会话线 40万</span>
+      <span class="tip" style="color:var(--accent)" data-tip="压缩触发线 × 0.9 的最后通牒：越过压缩触发线后引擎将自动压缩并重写上下文、历史保真度下降，此线用于在被动压缩前主动决断。">▎压缩预警线 ${fmtTok(swLine)}</span>
+      <span class="tip" style="color:var(--red)" data-tip="引擎动手点：上下文到达此值即触发自动压缩，压缩前的细节被重写，增长曲线此后不再连续。">▎压缩触发线 ${fmtTok(trig)}</span>
     </div>` : ''}
     <div class="bsub" style="margin-top:6px">最近活动 ${fmtTime(s.time_updated_ms)} · 累计输入 ${fmtTok(s.total_input_tokens)} / 输出 ${fmtTok(s.total_output_tokens)} · sess ${escapeHtml(s.session_id.slice(5, 13))}</div>
   </div>`;
@@ -793,8 +821,9 @@ function renderDetail(d) {
     <div class="curve-box">
       <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">
         ${hline(trig, '#f85149', '压缩触发线 ' + fmtTok(trig))}
-        ${hline(400000, '#d29922', '危险带 40万')}
-        ${hline(swLine, '#58a6ff', '换会话线 ' + fmtTok(swLine))}
+        ${hline(400000, '#a371f7', '换会话线 40万')}
+        ${hline(200000, '#d29922', '涣散线 20万')}
+        ${hline(swLine, '#58a6ff', '压缩预警线 ' + fmtTok(swLine))}
         ${vlines}
         ${mainLine ? `<polyline points="${mainLine}" fill="none" stroke="#3fb950" stroke-width="2"/>` : ''}
         ${subDots}
