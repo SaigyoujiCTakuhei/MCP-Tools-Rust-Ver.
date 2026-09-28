@@ -48,6 +48,99 @@ pub struct McpConfig {
     pub resources_path: String,
 }
 
+/// 模型上下文参数（上下文看板用）
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ModelCtx {
+    /// 上下文窗口（token）
+    #[serde(default = "default_ctx_window")]
+    pub context_window: i64,
+    /// 最大输出（token，触发公式里 min(out, 21k) 用）
+    #[serde(default = "default_ctx_max_output")]
+    pub max_output: i64,
+}
+
+impl Default for ModelCtx {
+    fn default() -> Self {
+        Self {
+            context_window: default_ctx_window(),
+            max_output: default_ctx_max_output(),
+        }
+    }
+}
+
+fn default_ctx_window() -> i64 {
+    1_000_000
+}
+fn default_ctx_max_output() -> i64 {
+    128_000
+}
+
+/// 上下文看板配置 — 全部字段有内置默认，config.yaml 不写 ctxboard 节即用默认值
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CtxBoardConfig {
+    /// ZCode 引擎库 db.sqlite 路径（只读打开）
+    #[serde(default = "default_ctx_db_path")]
+    pub db_path: String,
+    /// ZCode 会话流水目录（rollout，压缩事件结构化解析用）
+    #[serde(default = "default_ctx_rollout_dir")]
+    pub rollout_dir: String,
+    /// 桌面壳任务索引（tasks-index.sqlite，会话存档/删除软标记的真源）
+    #[serde(default = "default_ctx_tasks_index")]
+    pub tasks_index_path: String,
+    /// 模型上下文参数表：model_id → 参数；未登记的模型用 fallback_model
+    #[serde(default = "default_ctx_models")]
+    pub models: std::collections::HashMap<String, ModelCtx>,
+    /// 未登记模型的兜底参数
+    #[serde(default)]
+    pub fallback_model: ModelCtx,
+    /// 计费系数（估算积分 / 每百万 token）：model_id → [输入, 缓存读, 输出]；
+    /// 未登记模型按 fallback_pricing
+    #[serde(default = "default_ctx_pricing")]
+    pub pricing: std::collections::HashMap<String, [f64; 3]>,
+    #[serde(default = "default_ctx_fallback_pricing")]
+    pub fallback_pricing: [f64; 3],
+}
+
+fn default_ctx_db_path() -> String {
+    "~/.zcode/cli/db/db.sqlite".to_string()
+}
+fn default_ctx_rollout_dir() -> String {
+    "~/.zcode/cli/rollout".to_string()
+}
+fn default_ctx_tasks_index() -> String {
+    "~/.zcode/v2/tasks-index.sqlite".to_string()
+}
+fn default_ctx_models() -> std::collections::HashMap<String, ModelCtx> {
+    std::collections::HashMap::from([
+        ("GLM-5.3-Flash".to_string(), ModelCtx::default()),
+        ("GLM-5.3".to_string(), ModelCtx::default()),
+    ])
+}
+fn default_ctx_pricing() -> std::collections::HashMap<String, [f64; 3]> {
+    // 2026-09 官方系数（积分/百万 token：输入 / 缓存读 / 输出），调价时改 config.yaml 即可
+    std::collections::HashMap::from([
+        ("GLM-5.3".to_string(), [6.9, 1.7, 24.0]),
+        ("GLM-5.3-Flash".to_string(), [2.3, 0.56, 8.0]),
+    ])
+}
+fn default_ctx_fallback_pricing() -> [f64; 3] {
+    [2.3, 0.56, 8.0]
+}
+
+impl Default for CtxBoardConfig {
+    fn default() -> Self {
+        Self {
+            db_path: default_ctx_db_path(),
+            rollout_dir: default_ctx_rollout_dir(),
+            tasks_index_path: default_ctx_tasks_index(),
+            models: default_ctx_models(),
+            fallback_model: ModelCtx::default(),
+            pricing: default_ctx_pricing(),
+            fallback_pricing: default_ctx_fallback_pricing(),
+        }
+    }
+}
+
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
@@ -66,6 +159,8 @@ pub struct AppConfig {
     pub tools: ToolsConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub ctxboard: CtxBoardConfig,
 }
 
 fn default_port() -> u16 {
@@ -110,6 +205,7 @@ impl Default for AppConfig {
                 prompts_path: default_prompts_path(),
                 resources_path: default_resources_path(),
             },
+            ctxboard: CtxBoardConfig::default(),
         }
     }
 }

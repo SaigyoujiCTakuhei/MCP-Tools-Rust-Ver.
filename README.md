@@ -19,7 +19,7 @@
 | 提示词/资源 | 文件驱动（`mcp_data/prompts`、`mcp_data/resources`），热重载并经协议列出（`prompts/list`、`resources/list`） |
 | 输入校验 | JSON Schema（jsonschema crate，注册时预编译） |
 | 鉴权 | 可选 Bearer Token（config / 环境变量） |
-| WebUI | 工具卡片（单击筛选日志）、提示词/资源页签、⚡ 任务进展页签、重载/扫描按钮、RAW 多行审计日志、断连横幅与告别屏、⏻ 关闭按钮 |
+| WebUI | 工具卡片（单击筛选日志）、📊 上下文看板（单击进：会话上下文/压缩/轮次/计费总览，已归档/删除单独成栏）、提示词/资源页签、⚡ 任务进展页签、重载/扫描按钮、RAW 多行审计日志、断连横幅与告别屏、⏻ 关闭按钮 |
 | 结构 | Cargo workspace：`server`（服务器）+ `tool_kit`（契约）+ `tools`（23 通用）+ `plugins/`（域插件） |
 
 ---
@@ -47,6 +47,7 @@ New_Architecture_v00/
 │       │   ├── handler.rs     # 协议核心（现代 + legacy 分发；工具/提示词/资源方法）
 │       │   ├── transport.rs   # 双时代传输 + 订阅长流（tools/prompts/resources list_changed）
 │       │   └── plugins.rs     # 插件发现/探测/执行/热重载
+│       ├── ctxboard/          # 上下文看板查询模块（引擎库三表+流水压缩解析+计费估算；WebUI 端点与 MCP 工具形态共用）
 │       └── dashboard/         # WebUI（api.rs + html.rs）
 ├── tool_kit/                  # 插件契约：ToolDecl / ToolOutput / kzm_tool! 宏
 ├── tools/src/bin/             # 23 个通用工具插件（kzm-*.rs，一个工具一个二进制）
@@ -138,9 +139,12 @@ curl -X POST http://127.0.0.1:58081/api/tools/hello_world/reload
 | `GET` | `/sse` | Legacy SSE 长流（首条 `endpoint` 事件 + 变更通知） |
 | `POST` | `/message?sessionId=xxx` | Legacy JSON-RPC（initialize 握手） |
 | `GET` | `/` | WebUI 管理面板 |
+| `GET` | `/api/ctx/sessions`、`/api/ctx/sessions/:id` | 上下文看板数据（会话总览 / 单会话轮次+曲线） |
 | `GET/POST` | `/api/tools*`、`/api/prompts*`、`/api/resources*`、`/api/tasks*`、`/api/logs*`、`/api/shutdown` | Dashboard 私有 API |
 
 WebUI：左侧「工具 / 提示词 / 资源」三页签；工具卡片**单击 = 日志按该工具筛选，再点/点筛选条取消**；
+工具列表顶部「📊 上下文看板」为本机 ZCode 会话的总览工具卡（**单击才进入**右栏看板视图，深链 `/?board=1`），
+一级为会话总览（上下文/压缩/计费估算，壳侧已归档/删除的会话单独成栏），二级下钻为轮次明细与上下文增长曲线；
 右上横幅在日志流断开（服务器关闭）时显示「服务器已断开」。
 
 ---
@@ -152,6 +156,9 @@ WebUI：左侧「工具 / 提示词 / 资源」三页签；工具卡片**单击 
 body `params._meta` 必含 `io.modelcontextprotocol/protocolVersion` 与
 `io.modelcontextprotocol/clientCapabilities`。服务端强制校验 Origin（回环/白名单）、
 头体一致性（-32020）、版本（-32022）、必需 `_meta`（-32602）；通知 → 202；未知方法 → 404。
+`server/discover`、`tools/list`、`prompts/list`、`resources/list`、`resources/read` 的
+complete 结果按 SEP-2549 携带顶层 `ttlMs` + `cacheScope` 缓存提示（列表 5 分钟/public，
+资源读取 0/private）。
 
 ```bash
 META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'

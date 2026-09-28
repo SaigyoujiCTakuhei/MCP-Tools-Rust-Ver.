@@ -3,6 +3,7 @@
 /// 工具全部为子进程插件（kzm-* 可执行文件），启动时自动发现；
 /// 改动工具源码后 `cargo build`，再经 WebUI/API「重载」即生效，无需重启服务器。
 mod config;
+mod ctxboard;
 mod dashboard;
 mod executor;
 mod mcp;
@@ -41,6 +42,8 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(v) = std::env::var("KZM_AUTO_OPEN_BROWSER") {
         app_config.server.auto_open_browser = matches!(v.as_str(), "1" | "true" | "TRUE" | "True" | "yes");
     }
+    // 上下文看板配置注入（不可变全局；查询模块与 WebUI 端点共用）
+    ctxboard::query::init(app_config.ctxboard.clone());
 
     // ========== 2. 日志初始化（读取 logging.level / logging.format） ==========
     let filter = EnvFilter::try_new(&app_config.logging.level).unwrap_or_else(|_| "info".into());

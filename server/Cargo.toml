@@ -37,6 +37,8 @@ fs-err = { version = "3", features = ["tokio"] }
 chrono = { workspace = true }
 # 输入 JSON Schema 校验（规范 MUST：validate all tool inputs）
 jsonschema = "0.52.0"
+# 上下文看板：只读查询 ZCode 引擎库（turn_usage / model_usage / session）
+rusqlite = { workspace = true }
 
 [features]
 default = []

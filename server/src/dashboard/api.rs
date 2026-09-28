@@ -208,6 +208,38 @@ pub async fn api_logs_stream(
     Sse::new(stream).keep_alive(KeepAlive::new())
 }
 
+// ==================== 上下文看板 ====================
+
+/// GET /api/ctx/sessions — 全部会话总览（上下文 / 压缩 / 计费估算）
+pub async fn api_ctx_sessions() -> Response {
+    match tokio::task::spawn_blocking(crate::ctxboard::query::list_sessions).await {
+        Ok(Ok(sessions)) => Json(sessions).into_response(),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("看板查询失败: {e:#}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("看板查询任务失败: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/ctx/sessions/{id} — 单会话下钻（轮次明细 + 上下文曲线 + 压缩事件）
+pub async fn api_ctx_session_detail(Path(id): Path<String>) -> Response {
+    match tokio::task::spawn_blocking(move || crate::ctxboard::query::session_detail(&id)).await {
+        Ok(Ok(detail)) => Json(detail).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("看板查询任务失败: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 // ==================== 路由构建 ====================
 
 /// 构建 Dashboard 路由
@@ -227,5 +259,7 @@ pub fn build_dashboard_router(state: AppState) -> Router {
         .route("/api/resources/reload", post(api_resources_reload))
         .route("/api/logs", get(api_logs))
         .route("/api/logs/stream", get(api_logs_stream))
+        .route("/api/ctx/sessions", get(api_ctx_sessions))
+        .route("/api/ctx/sessions/:id", get(api_ctx_session_detail))
         .with_state(state)
 }

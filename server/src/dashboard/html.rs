@@ -87,6 +87,39 @@ pub fn dashboard_html() -> &'static str {
   .log-tool { flex-shrink: 0; font-size: 11px; padding: 0 6px; border-radius: 4px; background: rgba(88, 166, 255, 0.15); color: var(--accent); }
   .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-size: 13px; }
   ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  /* ===== 上下文看板 ===== */
+  .board-entry { border-color: rgba(88,166,255,.55); }
+  .board-entry:hover { border-color: var(--accent); }
+  .board-entry .tool-name { color: var(--accent); }
+  .board-wrap { flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 13px; }
+  .bcard { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
+  .bcard:hover { border-color: var(--accent); }
+  .bcard .bhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .bcard .btitle { font-weight: 600; font-size: 14px; }
+  .bcard .bsub { color: var(--text-muted); font-size: 11px; }
+  .bchip { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(139,148,158,.15); color: var(--text-muted); }
+  .bchip.plan { background: rgba(88,166,255,.15); color: var(--accent); }
+  .bchip.model { background: rgba(63,185,80,.15); color: var(--green); }
+  .bchip.warn { background: rgba(210,153,34,.2); color: var(--yellow); }
+  .bchip.gone { background: rgba(248,81,73,.2); color: var(--red); }
+  .bsection { margin: 16px 0 6px; font-weight: 600; color: var(--text-muted); }
+  .ctxrow { display: flex; align-items: baseline; gap: 12px; font-size: 12px; flex-wrap: wrap; }
+  .ctxbar { position: relative; height: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin: 8px 0 3px; }
+  .ctxbar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px 0 0 6px; opacity: .7; }
+  .ctxbar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; }
+  .ctxbar .tick.trigger { background: var(--red); }
+  .ctxbar .tick.switchline { background: var(--accent); }
+  .ctxlegend { font-size: 10px; color: var(--text-muted); display: flex; gap: 14px; flex-wrap: wrap; }
+  .btoolbar { position: sticky; top: 0; z-index: 5; background: var(--bg); display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 6px 0; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .btable { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .btable th { color: var(--text-muted); font-weight: 500; text-align: left; }
+  .btable th, .btable td { border-bottom: 1px solid var(--border); padding: 5px 8px; white-space: nowrap; }
+  .btable tbody tr:hover td { background: rgba(88,166,255,.05); }
+  .curve-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin: 8px 0 12px; }
+  .status-chip { font-size: 10px; padding: 1px 6px; border-radius: 4px; }
+  .st-completed { background: rgba(63,185,80,.2); color: var(--green); }
+  .st-cancelled { background: rgba(210,153,34,.2); color: var(--yellow); }
+  .st-error { background: rgba(248,81,73,.2); color: var(--red); }
 </style>
 </head>
 <body>
@@ -123,6 +156,7 @@ pub fn dashboard_html() -> &'static str {
     <div class="tabs">
       <button class="rtab rtab-active" id="rtabLogs" onclick="switchRight('logs')">📋 日志</button>
       <button class="rtab" id="rtabTasks" onclick="switchRight('tasks')">⚡ 任务</button>
+      <button class="rtab" id="rtabBoard" style="display:none" onclick="switchRight('board')">📊 看板</button>
     </div>
     <div class="panel-header">
       <h2 id="rightTitle">📋 运行日志 <span id="filterChip" style="display:none; cursor:pointer; color:var(--accent);" onclick="clearFilter()" title="点击取消筛选">[筛选中，点击取消]</span></h2>
@@ -133,6 +167,9 @@ pub fn dashboard_html() -> &'static str {
     </div>
     <div class="log-area" id="taskArea" style="display:none">
       <div class="empty-state">暂无任务</div>
+    </div>
+    <div class="board-wrap" id="boardArea" style="display:none">
+      <div class="empty-state">正在加载看板…</div>
     </div>
   </div>
 </div>
@@ -192,18 +229,29 @@ function cardHtml(t) {
   `;
 }
 
+// 上下文看板工具卡：左栏置顶，单击才进入看板详情（右栏「📊 看板」页签仅在查看时存在）
+function boardCardHtml() {
+  const sel = rightTab === 'board' ? 'selected' : '';
+  return `
+    <div class="tool-card board-entry ${sel}" onclick="openBoard()" title="单击查看：ZCode 会话上下文 / 压缩 / 轮次 / 计费总览">
+      <div class="tool-name">📊 上下文看板 <span class="badge badge-on" style="background:rgba(88,166,255,.2);color:var(--accent)">本机</span></div>
+      <div class="tool-desc">ZCode 会话上下文 / 压缩 / 轮次 / 计费总览（只读本机引擎库；WebUI 专属，不进 MCP 协议）</div>
+    </div>
+  `;
+}
+
 // 按功能分组渲染（category 由各插件 decl 声明），单击组标题展开/收起
 function renderTools() {
   document.getElementById('listTitle').innerHTML = '工具列表 (<span id="toolCount">' + tools.length + '</span>)';
   const el = document.getElementById('listArea');
-  if (tools.length === 0) { el.innerHTML = '<div class="empty-state">没有工具（检查 kzm-* 插件是否已构建）</div>'; return; }
+  if (tools.length === 0) { el.innerHTML = boardCardHtml() + '<div class="empty-state">没有工具（检查 kzm-* 插件是否已构建）</div>'; return; }
   const groups = {};
   for (const t of tools) {
     const g = t.category || '未分类';
     (groups[g] = groups[g] || []).push(t);
   }
   const names = Object.keys(groups).sort((a, b) => a.localeCompare(b, 'zh'));
-  el.innerHTML = names.map(g => {
+  el.innerHTML = boardCardHtml() + names.map(g => {
     const open = !!expandedGroups[g];
     return `
       <div class="group-header" onclick="toggleGroup('${g}')">
@@ -384,10 +432,24 @@ async function loadLogs() {
 
 function switchRight(tab) {
   rightTab = tab;
+  const isBoard = tab === 'board';
   document.getElementById('rtabLogs').classList.toggle('rtab-active', tab === 'logs');
   document.getElementById('rtabTasks').classList.toggle('rtab-active', tab === 'tasks');
   document.getElementById('logArea').style.display = tab === 'logs' ? '' : 'none';
   document.getElementById('taskArea').style.display = tab === 'tasks' ? '' : 'none';
+  document.getElementById('boardArea').style.display = isBoard ? '' : 'none';
+  // 「看板」页签只在查看时存在：离开即收起，符合「单击左栏工具才展示详情」的交互
+  document.getElementById('rtabBoard').style.display = isBoard ? '' : 'none';
+  document.getElementById('rtabBoard').classList.toggle('rtab-active', isBoard);
+  if (isBoard) {
+    boardOpen = true;
+    loadBoard();
+    return;
+  }
+  boardOpen = false;
+  boardDetailId = null;
+  if (boardAutoTimer) { clearInterval(boardAutoTimer); boardAutoTimer = null; }
+  boardAutoOn = false;
   if (tab === 'tasks') {
     fetchTasks();
     if (!taskEs || taskEs.readyState === 2) openTaskStream();
@@ -509,9 +571,231 @@ function connectLogStream() {
   };
 }
 
+// ============ 上下文看板（左栏「上下文看板」工具卡进入） ============
+
+let boardOpen = false;
+let boardAutoTimer = null;
+let boardAutoOn = false;        // 勾选状态独立保存：列表重渲染（innerHTML 重建）后恢复
+let boardDetailId = null;       // 非空 = 二级下钻中
+const BOARD_SWITCH_RATIO = 0.9; // 换会话线 = 压缩触发线 × 0.9（v1 常量：换会话应发生在压缩前）
+
+function fmtTok(n) {
+  if (n === null || n === undefined) return '—';
+  return (n / 10000).toFixed(1) + '万';
+}
+function fmtTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtDur(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return ms + 'ms';
+  const s = ms / 1000;
+  return s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + 'm' + Math.round(s % 60) + 's';
+}
+function fmtPts(n) { return (n || 0).toFixed(2); }
+function planName(p) {
+  if (!p) return '—';
+  if (p.includes('individual')) return '个人池';
+  if (p.includes('team')) return '团队池';
+  if (p.includes('start-plan')) return 'start池';
+  return p;
+}
+function zoneColor(ctx) {
+  if (ctx === null || ctx === undefined) return 'var(--text-muted)';
+  if (ctx > 400000) return 'var(--red)';
+  if (ctx > 200000) return 'var(--yellow)';
+  return 'var(--green)';
+}
+
+function openBoard() { switchRight('board'); }
+
+async function loadBoard() {
+  if (boardDetailId) { await openSession(boardDetailId, true); return; }
+  const area = document.getElementById('boardArea');
+  try {
+    const res = await fetch('/api/ctx/sessions');
+    if (!res.ok) throw new Error(await res.text());
+    renderBoardList(await res.json());
+  } catch (e) {
+    area.innerHTML = '<div class="empty-state">看板加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function sessionCard(s) {
+  const ctx = s.context_tokens;
+  const trig = s.trigger_tokens;
+  const win = s.context_window || 1000000;
+  const swLine = trig ? Math.round(trig * BOARD_SWITCH_RATIO) : null;
+  const ctxTxt = (ctx === null || ctx === undefined)
+    ? '<span style="color:var(--text-muted)">无请求数据</span>'
+    : `<b style="color:${zoneColor(ctx)}">${fmtTok(ctx)}</b> / 触发线 ${fmtTok(trig)}（${trig ? (ctx / trig * 100).toFixed(1) : '—'}%）`;
+  const fillW = ctx ? Math.min(ctx / win * 100, 100) : 0;
+  const compactChip = s.time_compacting_ms ? '<span class="bchip warn">已压缩</span>' : '<span class="bchip">未压缩</span>';
+  return `
+  <div class="bcard" onclick="openSession('${s.session_id}')">
+    <div class="bhead">
+      <span class="btitle">${escapeHtml(s.title || s.session_id)}</span>
+      <span class="bchip model">${escapeHtml(s.model || '—')}</span>
+      <span class="bchip plan">${planName(s.provider_id)}</span>
+      ${compactChip}
+      ${s.deleted ? '<span class="bchip gone">已删除</span>' : s.archived ? '<span class="bchip warn">已归档</span>' : ''}
+      ${!s.deleted && !s.archived && s.subagent ? '<span class="bchip">子代理</span>' : ''}
+    </div>
+    <div class="ctxrow">
+      ${ctxTxt}
+      <span>积分估算 <b>${fmtPts(s.points_estimate)}</b></span>
+      <span>缓存命中 <b>${s.cache_hit_rate === null || s.cache_hit_rate === undefined ? '—' : (s.cache_hit_rate * 100).toFixed(1) + '%'}</b></span>
+      <span>${s.request_count} 次请求</span>
+    </div>
+    ${(ctx !== null && trig) ? `
+    <div class="ctxbar">
+      <div class="fill" style="width:${fillW}%;background:${zoneColor(ctx)}"></div>
+      <div class="tick switchline" style="left:${(swLine / win * 100).toFixed(2)}%" title="换会话线 ${fmtTok(swLine)}"></div>
+      <div class="tick trigger" style="left:${(trig / win * 100).toFixed(2)}%" title="压缩触发线 ${fmtTok(trig)}"></div>
+    </div>
+    <div class="ctxlegend">
+      <span>窗口 ${fmtTok(win)}</span>
+      <span style="color:var(--accent)">▎换会话线 ${fmtTok(swLine)}</span>
+      <span style="color:var(--red)">▎压缩触发线 ${fmtTok(trig)}</span>
+      <span style="color:var(--yellow)">▎危险带 40万</span>
+    </div>` : ''}
+    <div class="bsub" style="margin-top:6px">最近活动 ${fmtTime(s.time_updated_ms)} · 累计输入 ${fmtTok(s.total_input_tokens)} / 输出 ${fmtTok(s.total_output_tokens)} · sess ${escapeHtml(s.session_id.slice(5, 13))}</div>
+  </div>`;
+}
+
+function renderBoardList(sessions) {
+  // 三栏分流：壳侧 archived/deleted 的会话移出主列表，单独成「已归档/已删除」栏
+  const gone = sessions.filter(s => s.archived || s.deleted);
+  const live = sessions.filter(s => !s.archived && !s.deleted);
+  const main = live.filter(s => !s.subagent);
+  const subs = live.filter(s => s.subagent);
+  document.getElementById('boardArea').innerHTML = `
+    <div class="btoolbar">
+      <span style="font-weight:600">会话上下文总览（本机 ZCode · ${main.length} 主 + ${subs.length} 子代理${gone.length ? ` + ${gone.length} 已归档/删除` : ''}）</span>
+      <label style="font-size:12px;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="boardAuto" ${boardAutoOn ? 'checked' : ''} onchange="toggleBoardAuto()"> 自动刷新 30s</label>
+      <button class="btn" onclick="loadBoard()">🔄 刷新</button>
+      <span style="font-size:11px;color:var(--text-muted)">积分 = 官方系数 × 时段乘数的本地估算，非权威账单；配额余量在服务端（v2 接入）</span>
+    </div>
+    ${main.map(sessionCard).join('') || '<div class="empty-state">无会话</div>'}
+    ${subs.length ? `<div class="bsection">子代理会话（${subs.length}）</div>` + subs.map(sessionCard).join('') : ''}
+    ${gone.length ? `<div class="bsection">已归档 / 已删除（客户端列表已移除，本地副本与流水仍在）· ${gone.length}</div>` + gone.map(sessionCard).join('') : ''}
+  `;
+}
+
+function toggleBoardAuto() {
+  boardAutoOn = document.getElementById('boardAuto').checked;
+  if (boardAutoOn && !boardAutoTimer) {
+    boardAutoTimer = setInterval(() => { if (boardOpen && connected) loadBoard(); }, 30000);
+    loadBoard();
+  } else if (!boardAutoOn && boardAutoTimer) {
+    clearInterval(boardAutoTimer); boardAutoTimer = null;
+  }
+}
+
+async function openSession(id, keepScroll) {
+  boardDetailId = id;
+  const area = document.getElementById('boardArea');
+  const scroll = keepScroll ? area.scrollTop : 0;
+  if (!keepScroll) area.innerHTML = '<div class="empty-state">加载会话详情…</div>';
+  try {
+    const res = await fetch('/api/ctx/sessions/' + id);
+    if (!res.ok) throw new Error(await res.text());
+    renderDetail(await res.json());
+    if (keepScroll) area.scrollTop = scroll;
+  } catch (e) {
+    area.innerHTML = '<div class="empty-state">详情加载失败: ' + escapeHtml(e.message) + '</div><div style="text-align:center"><button class="btn" onclick="boardBack()">← 返回总览</button></div>';
+  }
+}
+
+function boardBack() { boardDetailId = null; loadBoard(); }
+
+function renderDetail(d) {
+  const area = document.getElementById('boardArea');
+  const win = d.context_window || 1000000;
+  const trig = d.trigger_tokens;
+  const swLine = trig ? Math.round(trig * BOARD_SWITCH_RATIO) : null;
+  const compactN = (d.compactions || []).length;
+  const compactChip = d.time_compacting_ms
+    ? `<span class="bchip warn">已压缩 · ${fmtTime(d.time_compacting_ms)}</span>`
+    : '<span class="bchip">未压缩</span>';
+
+  // 上下文增长曲线（SVG，无外部依赖）：主会话折线 + 子代理散点 + 三参考线 + 压缩竖线
+  let curveSvg = '<div class="bsub">无请求数据，无法画上下文曲线</div>';
+  if ((d.curve || []).length) {
+    const W = 900, H = 230, PL = 74, PR = 16, PT = 14, PB = 24;
+    const pts = d.curve;
+    const t0 = pts[0].t_ms, t1 = Math.max(pts[pts.length - 1].t_ms, t0 + 1);
+    const yTop = Math.max(trig || 0, ...pts.map(p => p.input_tokens), 1);
+    const x = t => PL + (t - t0) / (t1 - t0) * (W - PL - PR);
+    const y = v => PT + (1 - v / yTop) * (H - PT - PB);
+    const mainLine = pts.filter(p => p.agent === 'zcode-agent')
+      .map(p => `${x(p.t_ms).toFixed(1)},${y(p.input_tokens).toFixed(1)}`).join(' ');
+    const subDots = pts.filter(p => p.agent !== 'zcode-agent')
+      .map(p => `<circle cx="${x(p.t_ms).toFixed(1)}" cy="${y(p.input_tokens).toFixed(1)}" r="2.5" fill="#8b949e"><title>子代理请求 ${fmtTok(p.input_tokens)} @ ${fmtTime(p.t_ms)}</title></circle>`).join('');
+    const hline = (v, color, label) => v ? `<line x1="${PL}" x2="${W - PR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="${color}" stroke-dasharray="4 4" stroke-width="1"/><text x="${PL + 4}" y="${(y(v) - 3).toFixed(1)}" fill="${color}" font-size="10">${label}</text>` : '';
+    const vlines = (d.compactions || []).filter(c => c.t_ms >= t0 && c.t_ms <= t1)
+      .map(c => `<line x1="${x(c.t_ms).toFixed(1)}" x2="${x(c.t_ms).toFixed(1)}" y1="${PT}" y2="${H - PB}" stroke="#f85149" stroke-width="1.5"/><text x="${(x(c.t_ms) + 3).toFixed(1)}" y="${PT + 10}" fill="#f85149" font-size="10">压缩</text>`).join('');
+    curveSvg = `
+    <div class="curve-box">
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block">
+        ${hline(trig, '#f85149', '压缩触发线 ' + fmtTok(trig))}
+        ${hline(400000, '#d29922', '危险带 40万')}
+        ${hline(swLine, '#58a6ff', '换会话线 ' + fmtTok(swLine))}
+        ${vlines}
+        ${mainLine ? `<polyline points="${mainLine}" fill="none" stroke="#3fb950" stroke-width="2"/>` : ''}
+        ${subDots}
+        <text x="${PL}" y="${H - 6}" fill="#8b949e" font-size="10">${fmtTime(t0)}</text>
+        <text x="${W - PR}" y="${H - 6}" fill="#8b949e" font-size="10" text-anchor="end">${fmtTime(t1)}</text>
+      </svg>
+    </div>`;
+  }
+
+  const turns = (d.turns || []).map(t => {
+    const st = t.cancelled_by_user ? '<span class="status-chip st-cancelled">已取消</span>'
+      : t.context_exceeded ? '<span class="status-chip st-error">超上下文</span>'
+      : t.status === 'completed' ? '<span class="status-chip st-completed">完成</span>'
+      : `<span class="status-chip ${t.status ? 'st-error' : ''}">${escapeHtml(t.status || '—')}${t.error_type ? '·' + escapeHtml(t.error_type) : ''}</span>`;
+    return `<tr>
+      <td>${fmtTime(t.started_at_ms)}</td>
+      <td>${fmtDur(t.duration_ms)}</td>
+      <td>${t.ttft_ms === null || t.ttft_ms === undefined ? '—' : t.ttft_ms + 'ms'}</td>
+      <td>${t.model_request_count}</td>
+      <td>${t.tool_call_count}${t.tool_error_count ? `<span style="color:var(--red)">（${t.tool_error_count} 错）</span>` : ''}</td>
+      <td>${fmtTok(t.input_tokens)}</td>
+      <td>${fmtTok(t.output_tokens)}</td>
+      <td>${fmtPts(t.points_estimate)}</td>
+      <td>${st}</td>
+    </tr>`;
+  }).join('');
+
+  area.innerHTML = `
+    <div class="btoolbar">
+      <button class="btn" onclick="boardBack()">← 返回总览</button>
+      <span style="font-weight:600">${escapeHtml(d.session_id)}</span>
+      <span class="bchip model">${escapeHtml(d.model || '—')}</span>
+      ${compactChip}
+      <span style="font-size:11px;color:var(--text-muted)">压缩事件（流水解析）：${compactN} 次${d.scan_note ? '；' + escapeHtml(d.scan_note) : ''}</span>
+      <button class="btn" onclick="openSession('${d.session_id}')">🔄 刷新</button>
+    </div>
+    <div style="font-weight:600;margin-bottom:2px">上下文增长曲线（每请求的完整上下文，含缓存命中；绿线 = 主会话，灰点 = 子代理）</div>
+    ${curveSvg}
+    <div style="font-weight:600;margin:10px 0 2px">轮次明细（${(d.turns || []).length} 轮 · 输入为计费口径 = 回合内各请求累计）</div>
+    <table class="btable">
+      <thead><tr><th>开始</th><th>耗时</th><th>首token</th><th>请求数</th><th>工具</th><th>输入(计费)</th><th>输出</th><th>积分</th><th>状态</th></tr></thead>
+      <tbody>${turns || '<tr><td colspan="9" style="color:var(--text-muted)">无轮次记录</td></tr>'}</tbody>
+    </table>
+    ${d.rollout_file ? `<div class="bsub" style="margin-top:8px">流水：${escapeHtml(d.rollout_file)}</div>` : ''}
+  `;
+}
+
 refreshTools();
 loadLogs();
 connectLogStream();
+// 深链：/?board=1 直接进入看板（书签直达 / 自动化自检用）
+if (new URLSearchParams(location.search).has('board')) openBoard();
 </script>
 </body>
 </html>"##
