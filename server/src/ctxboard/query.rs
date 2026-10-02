@@ -1,21 +1,23 @@
-/// 上下文看板查询 — 只读访问 ZCode 引擎库与会话流水
+/// 上下文看板查询 — 只读访问 ZCode 引擎库
 ///
-/// 三层数据源：
-/// 1. db.sqlite `model_usage`（逐 API 请求粒度）：当前上下文、增长曲线、计费估算
-/// 2. db.sqlite `turn_usage` / `session`：轮次明细、压缩原生时间戳
-/// 3. rollout 流水文件：压缩事件结构化解析（仅匹配顶层 type/event 字段，
-///    绝不做子串搜索——2026-09-28 实测正文噪音在本会话就有 191 处假阳性）
+/// 三层数据源（全在 db.sqlite，rollout 流水不再参与）：
+/// 1. `model_usage`（逐 API 请求粒度）：当前上下文、增长曲线、计费估算
+/// 2. `turn_usage` / `session`：轮次明细、压缩中瞬态标记
+/// 3. `part` 表（09-30 ASUS 首实证的压缩权威层）：压缩史按 type='compaction'
+///    行的唯一 boundaryId 计数（1 事件=2 compaction part+1 timeline part，
+///    数行数会翻倍）；比扫 GB 级 rollout 便宜一个量级，流水清理后仍可查。
+///    ⚠️ token 曲线骤降≠压缩：旧大工具结果被引擎逐出上下文不落 db
+///    （ASUS 实证 447 请求 15 处骤降仅 2 处与压缩相关）
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{Connection, OpenFlags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::CtxBoardConfig;
 
@@ -68,8 +70,11 @@ pub struct BoardSession {
     /// 自动压缩触发线 = 窗口 − min(最大输出, 21k) − 13k
     pub trigger_tokens: Option<i64>,
     pub context_window: i64,
-    /// 原生压缩时间戳（session.time_compacting；db 只存最后一次）
+    /// 压缩中瞬态标记（session.time_compacting：压缩进行中置位、完成即 NULL——
+    /// 09-30 ASUS 实证，不能当「曾压缩过」判定，仅用于显示「压缩中…」）
     pub time_compacting_ms: Option<i64>,
+    /// 历史压缩次数（part 表唯一 boundaryId 计数，权威口径）
+    pub compaction_count: i64,
     /// 估算消耗（积分，含时段乘数；非权威账单）
     pub points_estimate: f64,
     pub total_input_tokens: i64,
@@ -124,12 +129,11 @@ pub struct SessionDetail {
     pub trigger_tokens: Option<i64>,
     pub turns: Vec<TurnRow>,
     pub curve: Vec<CurvePoint>,
-    /// 原生压缩时间戳（session.time_compacting）
+    /// 压缩中瞬态标记（语义同上，仅显示用）
     pub time_compacting_ms: Option<i64>,
-    /// 流水结构化解析到的压缩事件（best-effort，见 scan_compactions 注释）
+    /// 压缩事件（part 表权威层，每 boundaryId 一条）
     pub compactions: Vec<CompactionEvent>,
     pub rollout_file: Option<String>,
-    pub scan_note: Option<String>,
 }
 
 // ==================== 计费估算 ====================
@@ -245,6 +249,175 @@ fn load_usage_rows(conn: &Connection) -> anyhow::Result<Vec<UsageRow>> {
     Ok(rows)
 }
 
+// ==================== 压缩史（part 表权威层，09-30 ASUS 首实证） ====================
+
+/// 一个压缩边界的事件画像：时间取该 boundary 各 part 的最晚 time_created（完成边界），
+/// trigger/compactReason 在 ASUS 实证中分散于两条 compaction part（开始标记/完成边界），逐字段补齐
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct BoundaryEvent {
+    t_ms: i64,
+    trigger: String,
+    reason: String,
+}
+
+/// 压缩史增量状态：part 只追加（压缩行不改写），按 rowid 检查点增量扫描。
+/// Pi 实测全量扫 3.5 万 part ≈22s（SD I/O 瓶颈），30s 自动刷新不可承受——
+/// 检查点持久化到 ~/.cache/kzm/（服务重启不重扫）；每 24h 强制一次全量重扫，
+/// 兜底 rowid 复用（TEXT 主键表删除顶部行后新行可能复用 rowid）等极端情况。
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct CompactionState {
+    last_rowid: i64,
+    last_full_ms: i64,
+    /// session_id → boundaryId → 事件
+    sessions: HashMap<String, HashMap<String, BoundaryEvent>>,
+}
+
+const FULL_RESCAN_INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn compaction_state_path() -> PathBuf {
+    expand_home("~/.cache/kzm/ctxboard-compaction-state.json")
+}
+
+fn compaction_state_slot() -> &'static Mutex<Option<CompactionState>> {
+    static SLOT: OnceLock<Mutex<Option<CompactionState>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 单飞刷新压缩史（增量；检查点持久化 best-effort）。返回当前全量快照。
+fn refresh_compaction_state(conn: &Connection) -> anyhow::Result<CompactionState> {
+    let slot = compaction_state_slot();
+    let mut guard = slot.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(
+            fs::read_to_string(compaction_state_path())
+                .ok()
+                .and_then(|txt| serde_json::from_str(&txt).ok())
+                .unwrap_or_default(),
+        );
+    }
+    let st = guard.as_mut().unwrap();
+    let now = now_ms();
+    let full = now - st.last_full_ms > FULL_RESCAN_INTERVAL_MS;
+    let floor = if full { 0 } else { st.last_rowid };
+
+    // LIKE 裸词预筛免对全表 3.5 万行做 JSON 解析（写侧 spacing 不赌格式）；
+    // 正文引用该词的噪音行由 json_extract 精验证过滤
+    let mut stmt = conn.prepare(
+        "SELECT p.rowid, p.session_id, p.time_created, \
+                json_extract(p.data,'$.boundaryId'), json_extract(p.data,'$.operationId'), \
+                COALESCE(json_extract(p.data,'$.trigger'),''), \
+                COALESCE(json_extract(p.data,'$.compactReason'),'') \
+         FROM part p \
+         WHERE p.rowid > ?1 AND p.data LIKE '%compaction%' \
+           AND json_extract(p.data,'$.type') = 'compaction' \
+         ORDER BY p.rowid",
+    )?;
+    let rows = stmt
+        .query_map([floor], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (rowid, sid, t, boundary, operation, trigger, reason) in rows {
+        let bid = boundary.or(operation).unwrap_or_else(|| format!("rowid:{rowid}"));
+        let e = st
+            .sessions
+            .entry(sid)
+            .or_default()
+            .entry(bid)
+            .or_default();
+        e.t_ms = e.t_ms.max(t);
+        if e.trigger.is_empty() {
+            e.trigger = trigger;
+        }
+        if e.reason.is_empty() {
+            e.reason = reason;
+        }
+    }
+    // 检查点推进与是否出现候选行无关（无压缩也要越过已扫区间）
+    st.last_rowid = conn.query_row("SELECT COALESCE(MAX(rowid),0) FROM part", [], |r| r.get(0))?;
+    if full {
+        st.last_full_ms = now;
+    }
+    if let Some(dir) = compaction_state_path().parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    if let Ok(txt) = serde_json::to_string(st) {
+        let _ = fs::write(compaction_state_path(), txt);
+    }
+    Ok(st.clone())
+}
+
+/// 单会话压缩事件（明细竖线）：part_session_idx 定位 + LIKE 预筛，每次打开明细即查即得
+fn load_compaction_events(conn: &Connection, session_id: &str) -> anyhow::Result<Vec<CompactionEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.time_created, \
+                COALESCE(json_extract(p.data,'$.trigger'),''), \
+                COALESCE(json_extract(p.data,'$.compactReason'),''), \
+                COALESCE(json_extract(p.data,'$.boundaryId'), json_extract(p.data,'$.operationId'), p.id) \
+         FROM part p \
+         WHERE p.session_id = ?1 AND p.data LIKE '%compaction%' \
+           AND json_extract(p.data,'$.type') = 'compaction' \
+         ORDER BY p.time_created",
+    )?;
+    let rows = stmt
+        .query_map([session_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut by_bid: HashMap<String, BoundaryEvent> = HashMap::new();
+    for (t, trigger, reason, bid) in rows {
+        let e = by_bid.entry(bid).or_default();
+        e.t_ms = e.t_ms.max(t);
+        if e.trigger.is_empty() {
+            e.trigger = trigger;
+        }
+        if e.reason.is_empty() {
+            e.reason = reason;
+        }
+    }
+    let mut events: Vec<(i64, String)> = by_bid
+        .into_iter()
+        .map(|(_, e)| {
+            let mut kind = e.trigger;
+            if !e.reason.is_empty() {
+                if !kind.is_empty() {
+                    kind.push('/');
+                }
+                kind.push_str(&e.reason);
+            }
+            if kind.is_empty() {
+                kind = "compaction".into();
+            }
+            (e.t_ms, kind)
+        })
+        .collect();
+    events.sort_by_key(|(t, _)| *t);
+    Ok(events
+        .into_iter()
+        .map(|(t_ms, kind)| CompactionEvent { t_ms, kind })
+        .collect())
+}
+
 // ==================== 一级：会话总览 ====================
 
 /// 该行是否比已记录的最新行新（含「尚无记录」）
@@ -296,6 +469,7 @@ pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
     let conn = open_db()?;
     let usage = load_usage_rows(&conn)?;
     let shell = load_shell_index();
+    let compaction_state = refresh_compaction_state(&conn)?;
 
     // 每会话一遍聚合；第 6/7 项 = 最新一条请求 / 最新一条成功请求（上下文口径只认后者）
     let mut agg: HashMap<String, (i64, i64, i64, i64, f64, Option<UsageRow>, Option<UsageRow>)> =
@@ -356,7 +530,7 @@ pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
             context_tokens: latest_ok.as_ref().map(|l| l.input),
             trigger_tokens: trigger,
             context_window: mctx.context_window,
-            session_id: sid,
+            session_id: sid.clone(),
             title,
             time_updated_ms: updated,
             archived: shell_archived,
@@ -367,6 +541,11 @@ pub fn list_sessions() -> anyhow::Result<Vec<BoardSession>> {
             model,
             provider_id: latest_ok.as_ref().map(|l| l.provider_id.clone()),
             time_compacting_ms: (compacting > 0).then_some(compacting),
+            compaction_count: compaction_state
+                .sessions
+                .get(&sid)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0),
             points_estimate: points,
             total_input_tokens: total_input,
             total_output_tokens: total_output,
@@ -473,19 +652,9 @@ pub fn session_detail(session_id: &str) -> anyhow::Result<SessionDetail> {
         .ok();
     let mctx = model_ctx(model.as_deref().unwrap_or(""));
 
-    // 流水压缩事件（best-effort）
+    // 压缩事件：part 表权威层（不依赖流水存活；流水只用于展示路径）
+    let compactions = load_compaction_events(&conn, session_id)?;
     let rollout_file = expand_home(&cfg().rollout_dir).join(format!("model-io-{session_id}.jsonl"));
-    let (compactions, scan_note) = if rollout_file.exists() {
-        match scan_compactions(&rollout_file) {
-            Ok(v) => (v, None),
-            Err(e) => (Vec::new(), Some(format!("流水解析失败: {e:#}"))),
-        }
-    } else {
-        (
-            Vec::new(),
-            Some("流水文件已清理，压缩事件无法追溯（原生压缩时间戳仍有效）".into()),
-        )
-    };
 
     let trigger = model
         .as_ref()
@@ -502,90 +671,9 @@ pub fn session_detail(session_id: &str) -> anyhow::Result<SessionDetail> {
         rollout_file: rollout_file
             .exists()
             .then(|| rollout_file.display().to_string()),
-        scan_note,
     })
 }
 
-// ==================== 流水压缩事件解析 ====================
-
-struct ScanCacheEntry {
-    len: u64,
-    mtime: SystemTime,
-    events: Vec<CompactionEvent>,
-}
-
-fn scan_cache() -> &'static Mutex<HashMap<PathBuf, ScanCacheEntry>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, ScanCacheEntry>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 结构化解析压缩事件（按 (len, mtime) 缓存，大文件不重复扫）。
-///
-/// 判定 = 顶层对象的 type/event 字段值含 compact（不区分大小写）。
-/// 刻意不做子串搜索：流水每行含完整请求体，正文提到 compact 一词全是噪音
-/// （2026-09-28 本会话实测 191 处假阳性）。事件行很小，且请求体大行先按
-/// 首字段预筛（事件记录以 {"type"/{"event" 开头，请求记录以 {"completedAt"
-/// 等开头），避免对 GB 级文件做全量 JSON 解析。
-/// 流式逐行读取：最大流水 190MB+（Pi4），整读进内存不可接受。
-/// ⚠️ 当前全库零压缩（74 会话，2026-09-28），真实事件行形态未经样本验证；
-///    若客户端升级后形态变化，以 session.time_compacting 原生列为准。
-fn scan_compactions(path: &Path) -> anyhow::Result<Vec<CompactionEvent>> {
-    let meta = fs::metadata(path)?;
-    let len = meta.len();
-    let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-
-    if let Some(hit) = scan_cache().lock().unwrap().get(path) {
-        if hit.len == len && hit.mtime == mtime {
-            return Ok(hit.events.clone());
-        }
-    }
-
-    let file = fs::File::open(path).with_context(|| format!("读取流水失败: {}", path.display()))?;
-    let mut reader = io::BufReader::with_capacity(1 << 20, file);
-    let mut events = Vec::new();
-    let mut buf: Vec<u8> = Vec::with_capacity(1 << 20);
-    loop {
-        buf.clear();
-        // 手动 read_until：事件行只可能是每行开头 {"type"/{"event"，其余行仅做字节预筛
-        let n = reader.read_until(b'\n', &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        let t = trim_start(&buf);
-        if !(t.starts_with(b"{\"type\"") || t.starts_with(b"{\"event\"")) {
-            continue;
-        }
-        let Ok(v) = serde_json::from_slice::<serde_json::Value>(t) else {
-            continue;
-        };
-        for key in ["type", "event"] {
-            if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
-                if s.to_ascii_lowercase().contains("compact") {
-                    let ts = v
-                        .get("timestamp")
-                        .and_then(|x| x.as_i64())
-                        .or_else(|| v.get("time").and_then(|x| x.as_i64()))
-                        .unwrap_or(0);
-                    events.push(CompactionEvent { t_ms: ts, kind: s.to_string() });
-                }
-            }
-        }
-    }
-    let result = events.clone();
-    scan_cache().lock().unwrap().insert(
-        path.to_path_buf(),
-        ScanCacheEntry { len, mtime, events },
-    );
-    Ok(result)
-}
-
-fn trim_start(mut b: &[u8]) -> &[u8] {
-    while let Some(&f) = b.first() {
-        if f == b' ' || f == b'\t' || f == b'\r' {
-            b = &b[1..];
-        } else {
-            break;
-        }
-    }
-    b
-}
+// （2026-10-02 起，压缩史改读 part 表权威层——见本文件头部说明；
+//   原 rollout 结构化解析实现随 ASUS 首实证退役：事件真身在 db.part，
+//   rollout 事件行形态始终无真实样本验证，GB 级扫描也不划算）

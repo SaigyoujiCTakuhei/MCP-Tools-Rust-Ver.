@@ -663,7 +663,12 @@ function sessionCard(s) {
     ? '<span style="color:var(--text-muted)">无请求数据</span>'
     : `<b style="color:${zoneColor(ctx)}">${fmtTok(ctx)}</b> / 触发线 ${fmtTok(trig)}（${trig ? (ctx / trig * 100).toFixed(1) : '—'}%）`;
   const fillW = ctx ? Math.min(ctx / win * 100, 100) : 0;
-  const compactChip = s.time_compacting_ms ? '<span class="bchip warn">已压缩</span>' : '<span class="bchip">未压缩</span>';
+  // time_compacting 是瞬态列（压缩中置位、完成即 NULL），「曾压缩」看 compaction_count（part 表 boundaryId 口径）
+  const compactChip = s.time_compacting_ms
+    ? '<span class="bchip warn">压缩中…</span>'
+    : s.compaction_count > 0
+      ? `<span class="bchip warn">已压缩 ${s.compaction_count} 次</span>`
+      : '<span class="bchip">未压缩</span>';
   return `
   <div class="bcard" onclick="openSession('${s.session_id}')">
     <div class="bhead">
@@ -808,8 +813,10 @@ function renderDetail(d) {
   const swLine = trig ? Math.round(trig * BOARD_SWITCH_RATIO) : null;
   const compactN = (d.compactions || []).length;
   const compactChip = d.time_compacting_ms
-    ? `<span class="bchip warn">已压缩 · ${fmtTime(d.time_compacting_ms)}</span>`
-    : '<span class="bchip">未压缩</span>';
+    ? `<span class="bchip warn">压缩中…（自 ${fmtTime(d.time_compacting_ms)}）</span>`
+    : compactN > 0
+      ? `<span class="bchip warn">已压缩 ${compactN} 次</span>`
+      : '<span class="bchip">未压缩</span>';
 
   // 上下文增长曲线（SVG，无外部依赖）：主会话折线 + 子代理散点 + 三参考线 + 压缩竖线
   let curveSvg = '<div class="bsub">无请求数据，无法画上下文曲线</div>';
@@ -867,10 +874,10 @@ function renderDetail(d) {
       <span style="font-weight:600">${escapeHtml(d.session_id)}</span>
       <span class="bchip model">${escapeHtml(d.model || '—')}</span>
       ${compactChip}
-      <span style="font-size:11px;color:var(--text-muted)">压缩事件（流水解析）：${compactN} 次${d.scan_note ? '；' + escapeHtml(d.scan_note) : ''}</span>
+      <span style="font-size:11px;color:var(--text-muted)">压缩事件（part 表权威口径，唯一 boundaryId 计数）：${compactN} 次</span>
       <button class="btn" onclick="openSession('${d.session_id}')">🔄 刷新</button>
     </div>
-    <div style="font-weight:600;margin-bottom:2px">上下文增长曲线（每请求的完整上下文，含缓存命中；绿线 = 主会话，灰点 = 子代理）</div>
+    <div style="font-weight:600;margin-bottom:2px">上下文增长曲线（每请求的完整上下文，含缓存命中；绿线 = 主会话，灰点 = 子代理；骤降≠压缩——旧大工具结果会被引擎逐出上下文，红竖线才是真实压缩边界）</div>
     ${curveSvg}
     <div style="font-weight:600;margin:10px 0 2px">轮次明细（${(d.turns || []).length} 轮 · 输入为计费口径 = 回合内各请求累计）</div>
     <table class="btable">
