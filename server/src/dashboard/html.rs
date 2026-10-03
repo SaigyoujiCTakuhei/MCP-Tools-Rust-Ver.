@@ -1,7 +1,8 @@
 /// Dashboard HTML — 内嵌的完整 Web 管理界面
 ///
 /// 功能：工具卡片（卸载/重载/启用，单击卡片筛选日志）、资源与提示词页签、
-/// 服务器断连横幅（页面挂着的日志 SSE 断开时显示）。
+/// 服务器断连横幅（SSE 断开时显示；恢复由断连看门狗接管——探到服务器存活就整体
+/// 重建事件流，不依赖浏览器后台自动重连，Firefox 后台标签会把重连请求无限推迟）。
 
 pub fn dashboard_html() -> &'static str {
     r##"<!DOCTYPE html>
@@ -18,7 +19,9 @@ pub fn dashboard_html() -> &'static str {
     --green: #3fb950; --red: #f85149; --yellow: #d29922; --purple: #a371f7;
   }
   body { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
-  #banner { display: none; background: var(--red); color: #fff; text-align: center; padding: 8px 16px; font-size: 13px; font-weight: 600; }
+  #banner { display: none; text-align: center; padding: 8px 16px; font-size: 13px; font-weight: 600; }
+  #banner.reconnecting { background: var(--yellow); color: #0d1117; }
+  #banner.down { background: var(--red); color: #fff; }
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; }
   header h1 { font-size: 16px; font-weight: 600; }
   header h1 span { color: var(--red); }
@@ -144,7 +147,7 @@ pub fn dashboard_html() -> &'static str {
 </style>
 </head>
 <body>
-<div id="banner">⛔ 服务器已断开 — 请重新启动服务器后刷新页面</div>
+<div id="banner"><span id="bannerMsg">⚠️ 连接已中断 — 正在自动重连（服务器运行中无需刷新页面）</span> <button class="btn" onclick="forceReconnect()" title="不刷新页面，立即重建事件流">⟳ 立即重连</button></div>
 <div id="bye" style="display:none; position:fixed; inset:0; z-index:50; background:var(--bg); color:var(--text); flex-direction:column; align-items:center; justify-content:center; gap:12px; text-align:center; padding:24px;">
   <div style="font-size:20px; font-weight:600;">⏻ 服务器已优雅退出</div>
   <div style="font-size:14px; color:var(--text-muted);">服务已停止，此标签页可以关闭了</div>
@@ -200,7 +203,7 @@ let currentTab = 'tools';
 let logs = [];
 let currentFilter = null;   // null 或工具名（需求三：单击工具卡片筛选日志，再次点击/点筛选条取消）
 let es = null;                  // 日志 SSE（全局：关闭流程需要主动释放连接）
-let connected = true;           // false 时徽章统一显示「已停止」（断开后的快照态）
+let connected = true;           // false 时徽章统一显示「已断开」（断开后的快照态）
 let rightTab = 'logs';          // 右侧页签：logs | tasks
 let tasksData = [];             // 任务快照记录
 let taskOutputs = {};           // id → {lines: [], done: bool}（实时进展缓冲）
@@ -208,6 +211,7 @@ let taskEs = null;              // 任务事件流
 let expandedGroups = {};        // 工具分组展开状态（key=分组名，跨重渲染保留）
 let promptGroupsOpen = {};      // 提示词分组展开状态
 let disconnectNotified = false; // 断开态守卫：EventSource 每次重连失败都会触发 onerror，只处理第一次
+let byeShown = false;           // 优雅退出告别屏已显示（此后看门狗停手，别把告别屏当断线救活）
 
 function switchTab(tab) {
   currentTab = tab;
@@ -236,7 +240,7 @@ function cardHtml(t) {
     <div class="tool-card ${t.enabled ? '' : 'disabled'} ${currentFilter === t.name ? 'selected' : ''}" onclick="toggleFilter('${t.name}')">
       <div class="tool-name">
         ${t.name}
-        <span class="badge ${(connected && t.enabled) ? 'badge-on' : 'badge-off'}">${connected ? (t.enabled ? '运行中' : '已卸载') : '已停止'}</span>
+        <span class="badge ${(connected && t.enabled) ? 'badge-on' : 'badge-off'}">${connected ? (t.enabled ? '运行中' : '已卸载') : '已断开'}</span>
       </div>
       <div class="tool-desc">${t.description}</div>
       <div class="tool-actions" onclick="event.stopPropagation()">
@@ -421,6 +425,7 @@ function appendLogDom(entry) {
   div.className = 'log-entry';
   div.innerHTML = `<span class="log-time">${entry.timestamp}</span><span class="log-level ${entry.level}">${LEVEL_ZH[entry.level] || entry.level}</span>${entry.tool ? `<span class="log-tool">${entry.tool}</span>` : ''}<span class="log-msg">${escapeHtml(entry.message)}</span>`;
   area.appendChild(div);
+  while (area.children.length > 500) area.removeChild(area.firstChild); // DOM 条数与 logs 数组同步封顶（长挂页面防无限膨胀）
   area.scrollTop = area.scrollHeight;
 }
 
@@ -516,6 +521,7 @@ function openTaskStream() {
     } catch {}
   };
   taskEs.onerror = () => { showDisconnected(); };
+  taskEs.onopen = markConnected;   // 任务流单独复活时也要能清横幅（否则只有日志流重开会清）
 }
 
 function renderTasks() {
@@ -537,7 +543,7 @@ function renderTasks() {
 // ============ 连接状态（需求一：断开横幅） ============
 
 // 优雅关闭服务器（等价于终端 Ctrl+C）：响应返回后日志流会断开，
-// onerror 自动显示「服务器已断开」横幅；重启服务器后 EventSource 自动重连恢复
+// bye 告别屏接管本页（bye 屏下看门狗与自动重连都停手；重启服务器后刷新本页重新进入）
 async function shutdownServer() {
   if (!confirm('确定要优雅关闭服务器吗？（等价于终端 Ctrl+C，成功后本页显示告别屏）')) return;
   document.getElementById('btnShutdown').disabled = true;
@@ -555,41 +561,94 @@ async function shutdownServer() {
 
 function showBye() {
   connected = false;
+  byeShown = true;   // 告别屏是有意退出的终态：看门狗别探活、连接别自动「救活」
   document.getElementById('bye').style.display = 'flex';   // 全页接管
 }
 
-// 断开统一处理（幂等）：横幅 + 日志「已退出」+ 徽章翻为「已停止」+ 左栏转快照态。
-// EventSource 断线后会每约 5 秒自动重连，重连失败重复触发本函数——守卫保证只生效一次
+// 断开统一处理（幂等）：黄横幅「自动重连中」+ 日志提示 + 徽章翻「已断开」+ 左栏转快照态。
+// onerror 每次断线/重连失败都会触发本函数——守卫保证只生效一次
 function showDisconnected() {
   if (disconnectNotified) return;
   disconnectNotified = true;
   connected = false;
   if (currentTab === 'tools') renderTools();
-  addLogDirect('INFO', '🔌 服务器已退出');
+  addLogDirect('INFO', '🔌 连接中断，自动重连中…');
   document.getElementById('leftPanel').classList.add('stale');
-  document.getElementById('banner').style.display = 'block';
+  const banner = document.getElementById('banner');
+  banner.className = 'reconnecting';
+  document.getElementById('bannerMsg').textContent = '⚠️ 连接已中断 — 正在自动重连（服务器运行中无需刷新页面）';
+  banner.style.display = 'block';
   document.getElementById('statusBox').classList.add('disconnected');
   document.getElementById('connStatus').textContent = '已断开';
 }
 
+// 看门狗状态（探活进行中 / 连续失败计数 / 上次重建时刻——刚重建的流要给 15 秒自证）
+let probeInFlight = false, probeFails = 0, lastRebuildAt = 0;
+
+// 恢复统一处理（onopen，幂等）：清横幅 + 徽章翻回「已连接」；断开过才补刷新与日志
+function markConnected() {
+  const wasDown = disconnectNotified;
+  disconnectNotified = false;
+  connected = true;
+  probeFails = 0;
+  document.getElementById('banner').style.display = 'none';
+  document.getElementById('statusBox').classList.remove('disconnected');
+  document.getElementById('leftPanel').classList.remove('stale');
+  document.getElementById('btnShutdown').disabled = false;
+  document.getElementById('connStatus').textContent = '已连接 · 端口 58081';
+  if (wasDown) {
+    addLogDirect('INFO', '✅ 连接已恢复');
+    refreshTools();               // 断开期间工具徽章曾翻「已断开」
+    if (boardOpen) loadBoard();   // 看板开着时立即补一帧（自动刷新在断开期间停摆）
+  }
+}
+
+// 不刷新页面、整体重建事件流（横幅「立即重连」按钮 / 看门狗共用）
+function forceReconnect() {
+  connectLogStream();
+  if (taskEs) { taskEs.close(); taskEs = null; openTaskStream(); }   // 任务页签开着时同步重建
+}
+
+// 断连看门狗：横幅挂起期间每 5 秒探一次服务器是否还活着。
+// 恢复不再只押浏览器 EventSource 自动重连——Firefox 后台标签会无限推迟重连请求，
+// 「页面挂半天后横幅常驻、一刷新就好」正是这么来的。fetch 成功 = 服务器活着 →
+// 整体重建事件流（onopen 清横幅）；失败 = 服务器真退出了 → 横幅升级红色「服务器无响应」，
+// 继续探测，服务器回来后照旧自动恢复，全程无需刷新页面。
+async function probeAndRecover() {
+  if (connected || byeShown || probeInFlight) return;
+  if (Date.now() - lastRebuildAt < 15000) return;   // 刚重建过，给新流时间自证
+  probeInFlight = true;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch('/api/tasks', { cache: 'no-store', signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    lastRebuildAt = Date.now();
+    forceReconnect();
+  } catch (e) {
+    if (++probeFails >= 2) {
+      const banner = document.getElementById('banner');
+      banner.className = 'down';
+      document.getElementById('bannerMsg').textContent = '⛔ 服务器无响应（进程可能已退出）— 请到终端重启服务器；恢复后本页会自动重连';
+    }
+  } finally {
+    probeInFlight = false;
+  }
+}
+setInterval(probeAndRecover, 5000);
+// 回到前台立即探一次：后台标签的 setInterval 被节流到分钟级，切回来时不等下一个整点
+document.addEventListener('visibilitychange', () => { if (!document.hidden) probeAndRecover(); });
+
 function connectLogStream() {
+  if (es) es.close();   // 重建时先关旧流，防止新旧两条并存
   es = new EventSource('/api/logs/stream');
   es.addEventListener('log', (e) => {
     try { appendEntry(JSON.parse(e.data)); } catch {}
   });
-  es.onopen = () => {
-    disconnectNotified = false;
-    connected = true;
-    document.getElementById('banner').style.display = 'none';
-    document.getElementById('statusBox').classList.remove('disconnected');
-    document.getElementById('leftPanel').classList.remove('stale');
-    document.getElementById('btnShutdown').disabled = false;
-    document.getElementById('connStatus').textContent = '已连接 · 端口 58081';
-    refreshTools();   // 重连后刷新徽章（断开期间曾翻为「已停止」）
-  };
+  es.onopen = markConnected;
   es.onerror = () => {
-    // 服务器关闭 → 日志流断开 → 横幅 + 「已退出」日志 + 徽章「已停止」；
-    // 浏览器会自动重连，服务器恢复后全部自动恢复
+    // 连接断开 → 横幅 + 徽章「已断开」；之后的恢复交给看门狗 probeAndRecover
     showDisconnected();
   };
 }
