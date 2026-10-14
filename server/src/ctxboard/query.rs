@@ -463,6 +463,17 @@ struct ShellIndex {
     available: bool,
 }
 
+/// 壳侧已存档/已删除的会话 id 集（台账打标用：p 存档 = 会话完结，登记状态不再打标）
+pub(crate) fn shell_finished_ids() -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for (id, (deleted, archived)) in load_shell_index().marks {
+        if deleted || archived {
+            out.insert(id);
+        }
+    }
+    out
+}
+
 fn load_shell_index() -> ShellIndex {
     let path = expand_home(&cfg().tasks_index_path);
     let mut idx = ShellIndex { marks: HashMap::new(), known: std::collections::HashSet::new(), available: false };

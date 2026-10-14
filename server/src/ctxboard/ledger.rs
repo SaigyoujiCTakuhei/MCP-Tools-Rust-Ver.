@@ -5,9 +5,16 @@
 ///    或注记编号（「**=整理主线 - 02**」）——编号命名与主线（cur）组以这里为准
 /// 2. 各组编号 MD（`NN-组名.md`）的「涉及会话」表：首列 `sess_…`（- NN）标记——
 ///    补 00 表标题未带编号的追认行（如 11-01，组 MD 首列有标记而标题是原始指令）
-/// 3. 00 头注挂账段：`` `短id` 名称。- NN（…，组NN）`` ——已编号未入册的会话，打 pending 标记
+/// 3. 00 头注挂账段：`` `短id` 名称。- NN（…，组NN）`` ——已编号还没进正表的会话，打等待登记标
+///    （另：00 正表行内带「自登记」字样的行 = 会话自写的行，打已自登记标；主线过手后
+///    把行内字样改「已收编」即熄标。p 拍板口径：收编只走整理主线一条线，两档都是
+///    「主线处理前」的状态展示
 /// 4. 壳侧真名（最高优先）：引擎库 session.title = p 在壳侧编辑的名字——编号样式且
 ///    序号一致即采纳；未编辑的用完即弃会话是原始指令式标题，不覆盖台账命名
+/// 5. 壳侧已编号未入册：db 里标题是编号样式、但 MD 台账还没登记的会话（编号现场
+///    可见，打 unregistered 标；MD 正式登记后自然转正）
+///
+/// 两档标（已自登记/等待登记）只属于还开着的会话：壳侧已存档/删除 = 完结，一律熄标。
 ///
 /// 条目命名优先级：壳侧真名（编号样式）> 台账记录名 > 组前缀构造（仅追认行）。
 /// 组内早期行的旧式命名（如「A股投资与量化。- 03」无「11-」前缀）原样保留，
@@ -18,7 +25,7 @@ use std::fs;
 
 use serde::Serialize;
 
-use super::query::{cfg, expand_home, open_db};
+use super::query::{cfg, expand_home, open_db, shell_finished_ids};
 
 #[derive(Debug, Serialize)]
 pub struct NumberedLedger {
@@ -45,8 +52,11 @@ pub struct LedgerItem {
     pub session_id: Option<String>,
     /// 短 id 线索（挂账行），前端按「包含匹配」兜底下钻
     pub id_hint: Option<String>,
-    /// 挂账 = 已编号但尚未入册（00 头注段）
-    pub pending: bool,
+    /// 已自登记 = 行已由会话自写入 00 正表（行内带「自登记」字样），待主线过手；
+    /// 主线过手时把行内「自登记」改「已收编」，标即熄
+    pub self_registered: bool,
+    /// 等待登记 = 台账文件里还没有行（00 头注挂账段 / 仅壳侧改名两来源）
+    pub unregistered: bool,
 }
 
 /// 解析中间态：同一条编号会话可能被多个来源命中，字段互补不互覆
@@ -55,8 +65,12 @@ struct RawItem {
     name: Option<String>,
     session_id: Option<String>,
     id_hint: Option<String>,
-    pending: bool,
+    self_registered: bool,
+    unregistered: bool,
 }
+
+/// 壳侧会话快照：id → (title, task_type)，来源 4/5 共用一次查询
+type ShellSessions = std::collections::HashMap<String, (String, String)>;
 
 struct GroupAcc {
     label: String,
@@ -106,8 +120,35 @@ pub fn list_numbered() -> NumberedLedger {
         )),
     }
 
-    // 来源 4（最高优先）：壳侧编辑过的会话名（引擎库 title）——编号样式且序号一致才采纳
-    apply_shell_titles(&mut groups, &mut warnings);
+    // 来源 4 + 5：壳侧真名（最高优先，覆盖已有条目）+ 壳侧已编号未入册（新增条目）
+    if let Some(shell) = load_shell_sessions(&mut warnings) {
+        apply_shell_titles(&mut groups, &shell);
+        add_unregistered_from_db(&mut groups, &shell, &md_stems);
+    }
+
+    // 存档熄标：p 在壳侧存档/删除 = 会话已完结，历史自登记行不再亮「已自登记」、
+    // 未登记的也不再亮「等待登记」——标只留给还开着的会话
+    let finished = shell_finished_ids();
+    if !finished.is_empty() {
+        for acc in groups.values_mut() {
+            for raw in acc.items.values_mut() {
+                let done = raw
+                    .session_id
+                    .as_deref()
+                    .map(|id| finished.contains(id))
+                    .unwrap_or(false)
+                    || raw
+                        .id_hint
+                        .as_deref()
+                        .map(|h| finished.iter().any(|id| id.len() >= 13 && &id[5..13] == h))
+                        .unwrap_or(false);
+                if done {
+                    raw.self_registered = false;
+                    raw.unregistered = false;
+                }
+            }
+        }
+    }
 
     // 组装：数字组升序、cur 殿后；渲染名按组内最大编号前缀归一
     let mut keys: Vec<String> = groups.keys().cloned().collect();
@@ -134,7 +175,8 @@ pub fn list_numbered() -> NumberedLedger {
                 name: display_name(raw.name.as_deref(), &prefix, *ord),
                 session_id: raw.session_id.clone(),
                 id_hint: raw.id_hint.clone(),
-                pending: raw.pending,
+                self_registered: raw.self_registered,
+                unregistered: raw.unregistered,
             })
             .collect::<Vec<_>>();
         total += items.len();
@@ -175,10 +217,12 @@ fn parse_group_md(txt: &str, key: String, stem: String, groups: &mut BTreeMap<St
         let Some(first) = cells.get(1) else { continue };
         let Some(ordinal) = ordinal_from_marker(first) else { continue };
         let session_id = find_sess_id(first);
-        // 标题列：| 会话 | 时间 | 标题 | 流水 | → cells[3]
-        let name = cells
-            .get(3)
-            .and_then(|t| numbered_name_before_paren(t).or_else(|| annotated_name(t)));
+        // 标题列：| 会话 | 时间 | 标题 | 流水 |（标题含裸「|」时中段拼回，同 00 表口径）
+        if cells.len() < 6 {
+            continue;
+        }
+        let title = cells[3..cells.len() - 2].join("|");
+        let name = numbered_name_before_paren(&title).or_else(|| annotated_name(&title));
         let acc = groups.entry(key.clone()).or_insert_with(|| GroupAcc {
             label: stem.clone(),
             items: BTreeMap::new(),
@@ -209,21 +253,22 @@ fn parse_ledger00(
         }
         let cells: Vec<&str> = line.split('|').collect();
         // | # | id | 日期 | 类型 | 标题 | 分组 | 流水 |
+        // 标题内可能含裸「|」（如「R/|MDD|」风险写法，#122 实例）——两端定长、中段拼回：
+        // 分组 = 倒数第 3 段，标题 = 第 6 段到分组前按「|」原样重组
         if cells.len() < 8 {
             continue;
         }
         if !cells[4].contains("主会话") {
             continue;
         }
-        let title = cells[5].trim();
+        let group_cell = cells[cells.len() - 3].trim();
+        let title = cells[5..cells.len() - 3].join("|");
+        let title = title.trim();
         let Some(name) = annotated_name(title).or_else(|| numbered_name_before_paren(title))
         else {
             continue;
         };
         let Some(ordinal) = extract_ordinal(&name) else { continue };
-        let Some(group_cell) = cells.get(6).map(|c| c.trim()) else {
-            continue;
-        };
         let Some((key, fallback_label)) = group_of_00(group_cell) else {
             continue;
         };
@@ -239,6 +284,10 @@ fn parse_ledger00(
                 format!("sess_{id}")
             }
         });
+        // 已自登记：非 cur 行看「自登记」字样（主线过手后改「已收编」即熄标）；
+        // cur 行（会话整理主线）一律算——主线只自写行、无他人代登记，存档即熄标
+        let self_reg =
+            key == "cur" || (title.contains("自登记") && !title.contains("已收编"));
         let acc = groups.entry(key).or_insert_with(|| GroupAcc {
             label,
             items: BTreeMap::new(),
@@ -246,6 +295,9 @@ fn parse_ledger00(
         let raw = acc.items.entry(ordinal).or_default();
         // 00 表为权威命名（组 MD 先扫，其标题可能是截断的原始指令），无条件覆盖
         raw.name = Some(name);
+        if self_reg {
+            raw.self_registered = true;
+        }
         if raw.session_id.is_none() {
             raw.session_id = session_id;
         }
@@ -293,7 +345,7 @@ fn parse_pending_headnote(
                                 raw.name = Some(cand.to_string());
                             }
                             raw.id_hint = Some(id.to_string());
-                            raw.pending = true;
+                            raw.unregistered = true;
                             i = start + close + 1 + paren;
                             continue;
                         }
@@ -305,49 +357,99 @@ fn parse_pending_headnote(
     }
 }
 
-/// 来源 4（壳侧真名，最高优先）：p 在壳侧编辑过的会话名以壳侧为准（引擎库 title）。
-/// 采纳门槛 = 真名本身是编号样式且序号与本条一致：原始指令式标题（用完即弃、未编辑的
-/// 会话）不覆盖台账命名；台账无名且真名也不编号 → 留空走组前缀构造
-fn apply_shell_titles(groups: &mut BTreeMap<String, GroupAcc>, warnings: &mut Vec<String>) {
-    if groups.is_empty() {
-        return;
-    }
+/// 壳侧会话快照：一次只读查询，供真名覆盖与未入册新增两处使用
+fn load_shell_sessions(warnings: &mut Vec<String>) -> Option<ShellSessions> {
     let conn = match open_db() {
         Ok(c) => c,
         Err(e) => {
             warnings.push(format!("引擎库打不开（全部按台账名展示）: {e:#}"));
-            return;
+            return None;
         }
     };
-    let Ok(mut stmt) = conn.prepare("SELECT id, COALESCE(title,'') FROM session") else {
-        return;
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, COALESCE(title,''), COALESCE(task_type,'') FROM session",
+    ) else {
+        return None;
     };
     let Ok(rows) = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     }) else {
-        return;
+        return None;
     };
-    let mut by_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    // 挂账行只有 8 位短 id：sess_ + 前 8 位 hex 建前缀索引
+    let mut m = ShellSessions::new();
+    for (id, title, task_type) in rows.flatten() {
+        m.insert(id, (title, task_type));
+    }
+    Some(m)
+}
+
+/// 来源 4（壳侧真名，最高优先）：p 在壳侧编辑过的会话名以壳侧为准。
+/// 采纳门槛 = 真名本身是编号样式且序号与本条一致：原始指令式标题（用完即弃、未编辑的
+/// 会话）不覆盖台账命名；台账无名且真名也不编号 → 留空走组前缀构造
+fn apply_shell_titles(groups: &mut BTreeMap<String, GroupAcc>, shell: &ShellSessions) {
     let mut by_hint: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for (id, title) in rows.flatten() {
+    for id in shell.keys() {
         if id.len() >= 13 && id.starts_with("sess_") {
-            by_hint.insert(id[5..13].to_string(), title.clone());
+            by_hint.insert(id[5..13].to_string(), id.clone());
         }
-        by_id.insert(id, title);
     }
     for acc in groups.values_mut() {
         for (ord, raw) in acc.items.iter_mut() {
-            let shell = raw
+            let id = raw
                 .session_id
-                .as_deref()
-                .and_then(|sid| by_id.get(sid))
-                .or_else(|| raw.id_hint.as_deref().and_then(|h| by_hint.get(h)));
-            if let Some(t) = shell {
-                if extract_ordinal(t) == Some(*ord) {
-                    raw.name = Some(t.clone());
-                }
+                .clone()
+                .or_else(|| raw.id_hint.as_deref().and_then(|h| by_hint.get(h).cloned()));
+            let Some(id) = id else { continue };
+            let Some((title, _)) = shell.get(&id) else { continue };
+            if extract_ordinal(title) == Some(*ord) {
+                raw.name = Some(title.clone());
+                raw.session_id = raw.session_id.clone().or(Some(id));
             }
+        }
+    }
+}
+
+/// 来源 5：壳侧已编号、MD 台账还没登记的会话——标题「NN-组名。- 序号」样式即入账
+/// （组号取标题前两位，且该槽位未被 MD/00 来源占据），打 unregistered 标；
+/// MD 正式登记后同名条目被台账来源先占，这里自动跳过 = 转正
+fn add_unregistered_from_db(
+    groups: &mut BTreeMap<String, GroupAcc>,
+    shell: &ShellSessions,
+    md_stems: &BTreeMap<String, String>,
+) {
+    for (id, (title, task_type)) in shell {
+        if matches!(task_type.as_str(), "subagent_child" | "workflow_child") {
+            continue;
+        }
+        let Some(ordinal) = extract_ordinal(title) else { continue };
+        let head = title.trim().as_bytes();
+        // 组号 = 标题开头的「NN-」前缀；无前缀的编号名（如「Rust 学习。- 01」）归不了组，留给 MD 登记
+        if head.len() < 3 || !head[0].is_ascii_digit() || !head[1].is_ascii_digit() || head[2] != b'-' {
+            continue;
+        }
+        let key = title.trim()[..2].to_string();
+        let acc = groups.entry(key.clone()).or_insert_with(|| GroupAcc {
+            label: md_stems
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| format!("组{key}")),
+            items: BTreeMap::new(),
+        });
+        if !acc.items.contains_key(&ordinal) {
+            acc.items.insert(
+                ordinal,
+                RawItem {
+                    name: Some(title.trim().to_string()),
+                    session_id: Some(id.clone()),
+                    id_hint: None,
+                    self_registered: false,
+                    unregistered: true,
+                },
+            );
         }
     }
 }
@@ -514,6 +616,7 @@ mod tests {
 | 1 | `44444444-4444-4444-8444-444444444444` | 10-12 晚 | 主会话 | 阅读"AI Related\会话整理"下的 00 和 11，之后立个项（**=11-A 股投资与量化。- 07**：190 msgs，19:50） | 11·A股投资与量化 | 在 |
 | 2 | `55555555-5555-4555-8555-555555555555` | 10-14 | 主会话 | 05-安卓运维。- 14（65 msgs，12:18~13:14，自登记） | 05·安卓运维 | 在 |
 | 3 | `66666666-6666-4666-8666-666666666666` | 10-14 | 主会话 | 整理会话总结并同步MD文件。- 03（进行中） | cur·当前 | 在 |
+| 5 | `88888888-8888-4888-8888-888888888888` | 10-14 | 主会话 | 阅读 00 和 06，之后复核（**=06-战地6武器数据。- 03**：判读=v0.1 四胜 R/|MDD| 16.44 全表最高，自登记） | 06·战地6数据 | 在 |
 | 4 | `77777777-7777-4777-8777-777777777777` | 08-11 | 主会话 | hello? | 10·零散咨询 | 已清理 |
 "#;
 
@@ -537,7 +640,10 @@ mod tests {
         // 标题「政策梳理与筛选」不带编号 → 名字留空，渲染层按组前缀归一补齐
         assert_eq!(it.name, None);
         assert!(it.session_id.as_deref().unwrap().starts_with("sess_33333333"));
-        assert!(g05.items.get(&14).unwrap().session_id.as_deref().unwrap().starts_with("sess_55555555"));
+        let it14 = g05.items.get(&14).unwrap();
+        assert!(it14.session_id.as_deref().unwrap().starts_with("sess_55555555"));
+        // 行内带「自登记」→ 已自登记档
+        assert!(it14.self_registered);
     }
 
     #[test]
@@ -550,6 +656,8 @@ mod tests {
         );
         let cur = groups.get("cur").unwrap();
         assert_eq!(cur.label, "会话整理主线");
+        // cur 行（会话整理主线）一律已自登记：主线只自写行，存档才熄标
+        assert!(cur.items.get(&3).unwrap().self_registered);
         assert_eq!(
             cur.items.get(&3).unwrap().name.as_deref(),
             Some("整理会话总结并同步MD文件。- 03")
@@ -565,11 +673,21 @@ mod tests {
         assert!(groups.get("01").is_none());
         let g09 = groups.get("09").unwrap();
         let it = g09.items.get(&1).unwrap();
-        assert!(it.pending);
+        assert!(it.unregistered);
         assert_eq!(it.id_hint.as_deref(), Some("abcd1234"));
         assert_eq!(it.name.as_deref(), Some("Rust 学习。- 01"));
         let g10 = groups.get("10").unwrap();
         assert_eq!(g10.items.get(&5).unwrap().id_hint.as_deref(), Some("91225874"));
+    }
+
+    #[test]
+    fn pipe_in_title_row_still_flags_self_registered() {
+        let groups = feed();
+        let g06 = groups.get("06").unwrap();
+        let it = g06.items.get(&3).unwrap();
+        // 标题里的「R/|MDD|」把行切成 11 段：分组列右锚后仍归组 06，且「自登记」照常点亮
+        assert!(it.self_registered);
+        assert!(it.session_id.as_deref().unwrap().starts_with("sess_88888888"));
     }
 
     #[test]
@@ -632,3 +750,4 @@ mod tests {
         );
     }
 }
+

@@ -97,8 +97,9 @@ pub fn dashboard_html() -> &'static str {
   .board-wrap { flex: 1; overflow-y: auto; padding: 12px 16px; font-size: 13px; }
   .bcard { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
   .bcard:hover { border-color: var(--accent); }
-  .bcard .bhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-  .bcard .btitle { font-weight: 600; font-size: 14px; }
+  .bcard .bhead { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-bottom: 6px; }
+  .bcard .btitle { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+  .bcard .bhead .bchip { flex-shrink: 0; }
   .bcard .bsub { color: var(--text-muted); font-size: 11px; }
   .bchip { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: rgba(139,148,158,.15); color: var(--text-muted); }
   .bchip.plan { background: rgba(88,166,255,.15); color: var(--accent); }
@@ -170,6 +171,10 @@ pub fn dashboard_html() -> &'static str {
   }
   .litem:hover { color: var(--accent); border-color: var(--accent); }
   .litem-pending { opacity: .55; }
+  /* 状态徽章内嵌在名字芯片里（不独立成 chip，避免换行时与名字散开） */
+  .lflag { font-size: 10px; padding: 0 5px; margin-left: 5px; border-radius: 4px; vertical-align: 1px; }
+  .lflag-self { background: rgba(210,153,34,.18); color: var(--yellow); }
+  .lflag-wait { background: rgba(139,148,158,.18); color: var(--text-muted); }
   .bcard.flash { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(88,166,255,.08); }
   #btnTop { position: fixed; right: 18px; bottom: 18px; z-index: 30; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
 </style>
@@ -784,7 +789,7 @@ function sessionCard(s) {
   return `
   <div class="bcard" id="bsess-${s.session_id}" onclick="openSession('${s.session_id}')">
     <div class="bhead">
-      <span class="btitle">${escapeHtml(s.title || s.session_id)}</span>
+      <span class="btitle" title="${escapeHtml(s.title || s.session_id)}">${escapeHtml(s.title || s.session_id)}</span>
       <span class="bchip model">${escapeHtml(s.model || '—')}</span>
       <span class="bchip plan">${planName(s.provider_id)}</span>
       ${compactChip}
@@ -882,8 +887,9 @@ function ledgerSectionHtml() {
     const items = g.items.map(it => {
       const click = it.session_id ? `gotoSessionCard('${it.session_id}')`
         : it.id_hint ? `gotoByHint('${it.id_hint}')` : null;
+      const flag = it.self_registered ? ['已自登记', 'lflag-self'] : it.unregistered ? ['等待登记', 'lflag-wait'] : null;
       const attrs = `${click ? ` onclick="${click}"` : ''}${it.session_id ? ` title="定位到列表中的会话卡片 · ${it.session_id}"` : ' title="定位到列表中的会话卡片"'}`;
-      return `<span class="litem ${it.pending ? 'litem-pending' : ''}"${attrs}>${escapeHtml(it.name)}</span>${it.pending ? '<span class="bchip">挂账</span>' : ''}`;
+      return `<span class="litem ${flag ? 'litem-pending' : ''}"${attrs}>${escapeHtml(it.name)}${flag ? `<span class="lflag ${flag[1]}">${flag[0]}</span>` : ''}</span>`;
     }).join('');
     return `<div class="ledger-line"><div><b>${escapeHtml(g.label)}</b> <span class="group-count">(${g.count})</span>：</div><div class="ledger-items">${items}</div></div>`;
   }).join('');
