@@ -287,7 +287,23 @@ async fn main() -> anyhow::Result<()> {
     // 浏览器 keep-alive 长连接），可能无限拖延进程退出；因此并行一个
     // 「信号 + 10 秒」截止 future，到点后 main 返回、运行时丢弃剩余任务，
     // 由进程退出强制断开残留连接。
+    //
+    // 10-13 僵死事故加固：tokio 侧的 10 秒死线自己也要有可调度的 worker 才能
+    // 醒来——当晚 worker 被同步死锁（tasks DashMap 自死锁）埋掉后，信号根本
+    // 处理不了，进程成了不 accept 也不退出的僵尸。故另起一根纯 OS 线程看门狗：
+    // 异步侧收到关闭信号即 ping 它，它睡 12 秒（比异步死线多 2 秒优雅余量）
+    // 后无条件 process::exit——OS 线程不受运行时饿死影响，退出有双重保险。
     let (grace_tx, grace_rx) = tokio::sync::watch::channel(false);
+    let (force_tx, force_rx) = std::sync::mpsc::channel::<()>();
+    std::thread::Builder::new()
+        .name("force-exit-watchdog".into())
+        .spawn(move || {
+            if force_rx.recv().is_ok() {
+                std::thread::sleep(Duration::from_secs(12));
+                std::process::exit(70); // 70 = EX_SOFTWARE：标识走的是强退兜底而非优雅路径
+            }
+        })
+        .expect("强退看门狗线程启动失败");
     let server = tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
@@ -302,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
                 .context("MCP 服务器运行错误")?;
             info!("👋 服务器已优雅退出");
         }
-        _ = shutdown_then_deadline(shutdown_rx, logs.clone(), grace_tx) => {
+        _ = shutdown_then_deadline(shutdown_rx, logs.clone(), grace_tx, force_tx) => {
             info!("⚠️ 排水超时（10 秒），服务器已强制退出");
         }
     }
@@ -345,15 +361,18 @@ fn resolve_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("config.yaml"))
 }
 
-/// 关闭信号 + 排水截止：信号到来打一次日志 → 通知 axum 排水 → 最多 10 秒后强制退出
+/// 关闭信号 + 排水截止：信号到来打一次日志 → 通知 axum 排水 → 最多 10 秒后强制退出。
+/// 同时 ping OS 线程强退看门狗（见 main 中的加固注释）作为运行时饿死时的兜底。
 async fn shutdown_then_deadline(
     rx: tokio::sync::watch::Receiver<bool>,
     logs: Arc<LogSystem>,
     grace: tokio::sync::watch::Sender<bool>,
+    force: std::sync::mpsc::Sender<()>,
 ) {
     wait_shutdown_signal(rx).await;
     info!("🛑 收到关闭信号，正在优雅退出...");
     let _ = grace.send(true);
+    let _ = force.send(());
     tokio::time::sleep(Duration::from_secs(10)).await;
     // 此时浏览器等客户端的 SSE 连接多半还挂着（正是排水超时的原因），
     // 把强制退出原因经日志通道推给它们，浏览器就能看到退出原因而非无声断连

@@ -5,3 +5,4 @@
 /// - 当前上下文 = model_usage 最新一行的 input_tokens（含缓存命中；turn_usage 是回合累计计费口径，勿混用）
 /// - 自动压缩触发线 = 上下文窗口 − min(最大输出, 21k) − 13k（1M 窗 ≈ 96.6 万）
 pub mod query;
+pub mod ledger;

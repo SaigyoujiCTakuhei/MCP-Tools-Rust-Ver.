@@ -87,6 +87,9 @@ pub struct CtxBoardConfig {
     /// 桌面壳任务索引（tasks-index.sqlite，会话存档/删除软标记的真源）
     #[serde(default = "default_ctx_tasks_index")]
     pub tasks_index_path: String,
+    /// 会话整理台账目录（编号会话板块数据源：00-附录-会话清单全表.md + 各组编号 MD）
+    #[serde(default = "default_ctx_ledger_dir")]
+    pub ledger_dir: String,
     /// 模型上下文参数表：model_id → 参数；未登记的模型用 fallback_model
     #[serde(default = "default_ctx_models")]
     pub models: std::collections::HashMap<String, ModelCtx>,
@@ -109,6 +112,9 @@ fn default_ctx_rollout_dir() -> String {
 }
 fn default_ctx_tasks_index() -> String {
     "~/.zcode/v2/tasks-index.sqlite".to_string()
+}
+fn default_ctx_ledger_dir() -> String {
+    "~/AI Related/会话整理".to_string()
 }
 fn default_ctx_models() -> std::collections::HashMap<String, ModelCtx> {
     std::collections::HashMap::from([
@@ -133,6 +139,7 @@ impl Default for CtxBoardConfig {
             db_path: default_ctx_db_path(),
             rollout_dir: default_ctx_rollout_dir(),
             tasks_index_path: default_ctx_tasks_index(),
+            ledger_dir: default_ctx_ledger_dir(),
             models: default_ctx_models(),
             fallback_model: ModelCtx::default(),
             pricing: default_ctx_pricing(),

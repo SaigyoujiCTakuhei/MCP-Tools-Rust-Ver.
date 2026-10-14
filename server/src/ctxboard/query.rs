@@ -29,13 +29,13 @@ pub fn init(cfg: CtxBoardConfig) {
     let _ = CFG.set(cfg);
 }
 
-fn cfg() -> &'static CtxBoardConfig {
+pub fn cfg() -> &'static CtxBoardConfig {
     static FALLBACK: OnceLock<CtxBoardConfig> = OnceLock::new();
     CFG.get().unwrap_or_else(|| FALLBACK.get_or_init(CtxBoardConfig::default))
 }
 
 /// 展开 `~/` 前缀
-fn expand_home(p: &str) -> PathBuf {
+pub(crate) fn expand_home(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
             return Path::new(&home).join(rest);
@@ -201,7 +201,7 @@ fn row_points(
 
 // ==================== DB 打开与行结构 ====================
 
-fn open_db() -> anyhow::Result<Connection> {
+pub(crate) fn open_db() -> anyhow::Result<Connection> {
     let path = expand_home(&cfg().db_path);
     Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("只读打开引擎库失败: {}", path.display()))
@@ -290,22 +290,55 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// 单飞刷新压缩史（增量；检查点持久化 best-effort）。返回当前全量快照。
+/// 扫描结果行（rowid, session_id, time_created, boundaryId, operationId, trigger, reason）
+type CompactionRow = (i64, String, i64, Option<String>, Option<String>, String, String);
+
+/// 把扫描行合并进状态（按 boundaryId 幂等：时间取 max、空位补齐——重复/并发扫描无副作用）
+fn merge_compaction_rows(st: &mut CompactionState, rows: &[CompactionRow]) {
+    for (rowid, sid, t, boundary, operation, trigger, reason) in rows {
+        let bid = boundary
+            .clone()
+            .or_else(|| operation.clone())
+            .unwrap_or_else(|| format!("rowid:{rowid}"));
+        let e = st
+            .sessions
+            .entry(sid.clone())
+            .or_default()
+            .entry(bid)
+            .or_default();
+        e.t_ms = e.t_ms.max(*t);
+        if e.trigger.is_empty() {
+            e.trigger = trigger.clone();
+        }
+        if e.reason.is_empty() {
+            e.reason = reason.clone();
+        }
+    }
+}
+
+/// 刷新压缩史（增量；检查点持久化 best-effort）。返回当前全量快照。
+///
+/// 10-13 复盘加固：扫描绝不持锁——锁只保护「读快照定下沿」与「合并写回」两个
+/// 短临界区。旧实现持 std Mutex 横跨整个 part 表扫描，扫描一旦变慢，30s 自动
+/// 刷新的后续请求只能在锁外排队堆积。并发扫描按 merge 幂等安全，检查点只进不退。
 fn refresh_compaction_state(conn: &Connection) -> anyhow::Result<CompactionState> {
     let slot = compaction_state_slot();
-    let mut guard = slot.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(
-            fs::read_to_string(compaction_state_path())
-                .ok()
-                .and_then(|txt| serde_json::from_str(&txt).ok())
-                .unwrap_or_default(),
-        );
-    }
-    let st = guard.as_mut().unwrap();
-    let now = now_ms();
-    let full = now - st.last_full_ms > FULL_RESCAN_INTERVAL_MS;
-    let floor = if full { 0 } else { st.last_rowid };
+    // 短临界区①：按需从盘加载初始状态 + 取扫描下沿
+    let (full, floor, now) = {
+        let mut guard = slot.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(
+                fs::read_to_string(compaction_state_path())
+                    .ok()
+                    .and_then(|txt| serde_json::from_str(&txt).ok())
+                    .unwrap_or_default(),
+            );
+        }
+        let st = guard.as_ref().unwrap();
+        let now = now_ms();
+        let full = now - st.last_full_ms > FULL_RESCAN_INTERVAL_MS;
+        (full, if full { 0 } else { st.last_rowid }, now)
+    };
 
     // LIKE 裸词预筛免对全表 3.5 万行做 JSON 解析（写侧 spacing 不赌格式）；
     // 正文引用该词的噪音行由 json_extract 精验证过滤
@@ -331,25 +364,15 @@ fn refresh_compaction_state(conn: &Connection) -> anyhow::Result<CompactionState
                 r.get::<_, String>(6)?,
             ))
         })?
-        .collect::<Result<Vec<_>, _>>()?;
-    for (rowid, sid, t, boundary, operation, trigger, reason) in rows {
-        let bid = boundary.or(operation).unwrap_or_else(|| format!("rowid:{rowid}"));
-        let e = st
-            .sessions
-            .entry(sid)
-            .or_default()
-            .entry(bid)
-            .or_default();
-        e.t_ms = e.t_ms.max(t);
-        if e.trigger.is_empty() {
-            e.trigger = trigger;
-        }
-        if e.reason.is_empty() {
-            e.reason = reason;
-        }
-    }
+        .collect::<Result<Vec<CompactionRow>, _>>()?;
     // 检查点推进与是否出现候选行无关（无压缩也要越过已扫区间）
-    st.last_rowid = conn.query_row("SELECT COALESCE(MAX(rowid),0) FROM part", [], |r| r.get(0))?;
+    let max_rowid: i64 = conn.query_row("SELECT COALESCE(MAX(rowid),0) FROM part", [], |r| r.get(0))?;
+
+    // 短临界区②：合并写回 + 推进检查点 + 落盘
+    let mut guard = slot.lock().unwrap();
+    let st = guard.as_mut().unwrap();
+    merge_compaction_rows(st, &rows);
+    st.last_rowid = st.last_rowid.max(max_rowid);
     if full {
         st.last_full_ms = now;
     }

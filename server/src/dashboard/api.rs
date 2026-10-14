@@ -240,6 +240,19 @@ pub async fn api_ctx_session_detail(Path(id): Path<String>) -> Response {
     }
 }
 
+/// GET /api/ctx/numbered — 编号会话台账（解析「会话整理」文件夹；台账自身故障降级为
+/// warnings 非空 + 空列表，不 500，避免拖垮整个看板）
+pub async fn api_ctx_numbered() -> Response {
+    match tokio::task::spawn_blocking(crate::ctxboard::ledger::list_numbered).await {
+        Ok(ledger) => Json(ledger).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("台账查询任务失败: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 // ==================== 路由构建 ====================
 
 /// 构建 Dashboard 路由
@@ -261,5 +274,6 @@ pub fn build_dashboard_router(state: AppState) -> Router {
         .route("/api/logs/stream", get(api_logs_stream))
         .route("/api/ctx/sessions", get(api_ctx_sessions))
         .route("/api/ctx/sessions/:id", get(api_ctx_session_detail))
+        .route("/api/ctx/numbered", get(api_ctx_numbered))
         .with_state(state)
 }

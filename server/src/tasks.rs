@@ -186,19 +186,35 @@ impl TaskRegistry {
         if self.records.len() <= 100 {
             return;
         }
-        let order = self.order.lock().unwrap();
-        let mut removed = 0;
+        let mut order = self.order.lock().unwrap();
+        let mut removed_ids: Vec<String> = Vec::new();
         let excess = self.records.len() - 100;
         for id in order.iter() {
-            if removed >= excess {
+            if removed_ids.len() >= excess {
                 break;
             }
-            if let Some(r) = self.records.get(id) {
-                if r.status != "running" {
-                    self.records.remove(id);
-                    removed += 1;
-                }
+            // ⚠️ 禁止在 get() 的读守卫存活期间调用 remove()/get_mut()——dashmap
+            // 同分片读写锁不可重入，守卫在手再取写锁 = 等自己释放 = 永久自死锁。
+            // 10-13 僵死事故根因：破百后首次 prune 在 remove 上冻死一个 worker，
+            // 该 worker 连带 tokio I/O 驱动器，accept/SSE/定时器全停（gdb 栈实证
+            // tasks.rs:198 ← start() ← tools_call）。先取状态、丢守卫、再删。
+            let finished = self
+                .records
+                .get(id)
+                .map(|r| r.status != "running")
+                .unwrap_or(false);
+            if finished {
+                removed_ids.push(id.clone());
             }
+        }
+        for id in &removed_ids {
+            self.records.remove(id);
+        }
+        // order 同步收缩（旧实现只删 records，order 里的陈旧 id 只增不减）
+        if !removed_ids.is_empty() {
+            let gone: std::collections::HashSet<&str> =
+                removed_ids.iter().map(|s| s.as_str()).collect();
+            order.retain(|i| !gone.contains(i.as_str()));
         }
     }
 }
@@ -210,4 +226,35 @@ fn cap_tail(s: &str, max: usize) -> String {
     }
     let cut: String = s.chars().skip(n - max).collect();
     format!("…（前段已省略）\n{cut}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 10-13 僵死事故回归测试：prune() 曾在 get() 读守卫存活期间调 remove()，
+    /// dashmap 同分片自死锁——记录数破百且最旧记录已完成时必现（修复前本测试原地挂死）。
+    #[test]
+    fn prune_after_100_must_not_deadlock() {
+        let reg = TaskRegistry::new(300);
+        let mut done_ids = Vec::new();
+        // 60 条已完成 + 45 条 running = 105 条；第 101 次 start 内部触发 prune
+        for i in 0..60 {
+            let id = reg.start(&format!("t{i}"), "{}");
+            reg.finish(&id, true, Some(0), 0.1, String::new(), String::new());
+            done_ids.push(id);
+        }
+        for i in 0..45 {
+            reg.start(&format!("r{i}"), "{}");
+        }
+        // prune 挂在 start() 内：长度一破百立刻被裁回 100（生产上同理，records 恒 ≤100）
+        assert_eq!(reg.records.len(), 100);
+        reg.start("trigger", "{}");
+        // start 先插入（101）再 prune：裁掉 1 条最旧已完成后仍回到 100
+        assert_eq!(reg.records.len(), 100, "应裁掉 1 条最旧已完成记录");
+        assert!(reg.records.get(&done_ids[0]).is_none(), "最旧已完成记录应被裁掉");
+        assert!(reg.records.get(&done_ids[59]).is_some());
+        // order 表同步收缩，不残留陈旧 id
+        assert_eq!(reg.order.lock().unwrap().len(), 100);
+    }
 }

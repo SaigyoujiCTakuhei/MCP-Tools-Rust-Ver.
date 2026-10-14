@@ -144,6 +144,34 @@ pub fn dashboard_html() -> &'static str {
   .st-completed { background: rgba(63,185,80,.2); color: var(--green); }
   .st-cancelled { background: rgba(210,153,34,.2); color: var(--yellow); }
   .st-error { background: rgba(248,81,73,.2); color: var(--red); }
+  /* 编号会话台账（会话整理）：左栏芯片流 + 右栏会话分栏，双栏双独立滚动同览。
+     外层（boardArea）不滚——工具条天然常驻顶部；滚动只发生在两栏内部，互不传导 */
+  .board-wrap { display: flex; flex-direction: column; overflow: hidden; }
+  .board-cols { display: flex; gap: 16px; flex: 1; min-height: 0; }
+  .board-ledger {
+    flex: 0 0 330px; overflow-y: auto;
+    overscroll-behavior: contain;   /* 双向禁滚动链：左边到头不带动右，右边到头不带动左 */
+    padding: 2px 4px 6px 2px;
+  }
+  .board-sessions { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .ledger-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .detail-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  @media (max-width: 1100px) {
+    .board-cols { flex-direction: column; }
+    .board-ledger { flex: none; max-height: 40vh; }
+  }
+  .ledger-line { margin: 0 0 12px; }
+  .ledger-line b { color: var(--text-muted); font-weight: 600; }
+  .ledger-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .litem {
+    display: inline-block; padding: 2px 9px; line-height: 1.7;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); cursor: pointer; transition: all .12s;
+  }
+  .litem:hover { color: var(--accent); border-color: var(--accent); }
+  .litem-pending { opacity: .55; }
+  .bcard.flash { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(88,166,255,.08); }
+  #btnTop { position: fixed; right: 18px; bottom: 18px; z-index: 30; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
 </style>
 </head>
 <body>
@@ -197,6 +225,7 @@ pub fn dashboard_html() -> &'static str {
     </div>
   </div>
 </div>
+<button id="btnTop" class="btn" style="display:none" onclick="boardToTop()" title="回到看板列表顶部">⤴ 回到顶部</button>
 <script>
 let tools = [], prompts = [], resources = [];
 let currentTab = 'tools';
@@ -466,6 +495,7 @@ function switchRight(tab) {
   document.getElementById('logArea').style.display = tab === 'logs' ? '' : 'none';
   document.getElementById('taskArea').style.display = tab === 'tasks' ? '' : 'none';
   document.getElementById('boardArea').style.display = isBoard ? '' : 'none';
+  updateTopBtn();   // 离开看板即收回顶按钮；进入时按滚动位置决定显隐
   // 「看板」页签只在查看时存在：离开即收起，符合「单击左栏工具才展示详情」的交互
   document.getElementById('rtabBoard').style.display = isBoard ? '' : 'none';
   document.getElementById('rtabBoard').classList.toggle('rtab-active', isBoard);
@@ -660,8 +690,19 @@ let boardAutoTimer = null;
 let boardAutoOn = true;         // 自动刷新偏好（持久化存储；缺省=开，09-28 拍板默认勾选）
 let boardDetailId = null;       // 非空 = 二级下钻中
 let boardData = [];             // 最近一次会话列表（折叠切换重渲染时免重新拉取）
+let ledgerData = null;          // 编号会话台账（会话整理文件夹；拉取失败保留旧数据）
+let boardLastOkMs = null;       // 最近一次成功拉取的时刻（「数据截至」戳，10-13 复盘新增）
 let boardSectionsOpen = {};     // 看板分栏展开状态（key→bool，undefined=展开；跨重渲染保留）
 const BOARD_SWITCH_RATIO = 0.9; // 压缩预警线 = 压缩触发线 × 0.9（防引擎自动压缩重写历史的最后通牒）；换会话建议线 = 换会话线 40万
+
+// 带超时的 fetch：10-13 复盘新增。旧实现 fetch 无超时——服务器僵死后请求
+// 永远悬着，页面顶着几小时前的旧快照毫无提示（当晚看板与 ZCode 客户端数字
+// 对不上的直接原因）。60s 上限 > 全量重扫的最坏耗时（SD 卡 5.8 万 part ≈40s）
+async function fetchTimeout(url, ms = 60000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { signal: ctrl.signal }); } finally { clearTimeout(timer); }
+}
 
 function fmtTok(n) {
   if (n === null || n === undefined) return '—';
@@ -700,12 +741,24 @@ async function loadBoard() {
   if (boardDetailId) { await openSession(boardDetailId, true); return; }
   const area = document.getElementById('boardArea');
   try {
-    const res = await fetch('/api/ctx/sessions');
+    const res = await fetchTimeout('/api/ctx/sessions');
     if (!res.ok) throw new Error(await res.text());
     boardData = await res.json();
+    boardLastOkMs = Date.now();
+    // 编号会话台账独立拉取：失败不打扰会话列表（板块内自带降级/陈旧提示）
+    try {
+      const lres = await fetchTimeout('/api/ctx/numbered');
+      if (lres.ok) ledgerData = await lres.json();
+    } catch (e) { /* 保留旧台账 */ }
     renderBoardList(boardData);
   } catch (e) {
-    area.innerHTML = '<div class="empty-state">看板加载失败: ' + escapeHtml(e.message) + '</div>';
+    // 刷新失败不再静默：手上有旧数据就保留旧卡片并打陈旧横幅（10-13 复盘：
+    // 僵死服务器上的自动刷新逐个悬死，页面看起来像「安静的面板」，实为几小时前的旧快照）
+    if (boardData.length) {
+      renderBoardList(boardData, e.message);
+    } else {
+      area.innerHTML = '<div class="empty-state">看板加载失败: ' + escapeHtml(e.message) + '</div>';
+    }
   }
 }
 
@@ -729,7 +782,7 @@ function sessionCard(s) {
       ? `<span class="bchip warn">已压缩 ${s.compaction_count} 次</span>`
       : '<span class="bchip">未压缩</span>';
   return `
-  <div class="bcard" onclick="openSession('${s.session_id}')">
+  <div class="bcard" id="bsess-${s.session_id}" onclick="openSession('${s.session_id}')">
     <div class="bhead">
       <span class="btitle">${escapeHtml(s.title || s.session_id)}</span>
       <span class="bchip model">${escapeHtml(s.model || '—')}</span>
@@ -814,7 +867,79 @@ function sectionHtml(key, label, cards, defaultOpen = true) {
   `;
 }
 
-function renderBoardList(sessions) {
+// 编号会话台账板块（数据源 =「AI Related/会话整理」，服务端 /api/ctx/numbered 现读现算）。
+// 条目点击 = 定位而非进详情：展开该会话卡片所在分栏（已归档/已删除等被折叠的先展开），
+// 滚动居中并短暂高亮；挂账行只有 8 位短 id，按引擎库会话列表包含匹配兜底
+function ledgerSectionHtml() {
+  if (!ledgerData) return '';
+  const head = `编号会话台账（会话整理 · 迄今 ${ledgerData.total} 个）`;
+  if (ledgerData.error || !(ledgerData.groups || []).length) {
+    const why = (ledgerData.warnings || []).join('；') || '未发现编号会话';
+    return `<div class="group-header" style="color:var(--yellow)">▸ ${head} — 不可用：${escapeHtml(why).slice(0, 200)}</div>`;
+  }
+  const open = boardSectionsOpen['ledger'] ?? true;
+  const lines = ledgerData.groups.map(g => {
+    const items = g.items.map(it => {
+      const click = it.session_id ? `gotoSessionCard('${it.session_id}')`
+        : it.id_hint ? `gotoByHint('${it.id_hint}')` : null;
+      const attrs = `${click ? ` onclick="${click}"` : ''}${it.session_id ? ` title="定位到列表中的会话卡片 · ${it.session_id}"` : ' title="定位到列表中的会话卡片"'}`;
+      return `<span class="litem ${it.pending ? 'litem-pending' : ''}"${attrs}>${escapeHtml(it.name)}</span>${it.pending ? '<span class="bchip">挂账</span>' : ''}`;
+    }).join('');
+    return `<div class="ledger-line"><div><b>${escapeHtml(g.label)}</b> <span class="group-count">(${g.count})</span>：</div><div class="ledger-items">${items}</div></div>`;
+  }).join('');
+  return `
+    <div class="group-header ledger-head" onclick="toggleSection('ledger')">
+      <span class="arrow">${open ? '▼' : '▶'}</span> 🗂️ 编号会话台账 · 迄今 ${ledgerData.total} 个 / ${ledgerData.groups.length} 组
+    </div>
+    ${open ? `<div class="ledger-body">${lines}</div>` : ''}
+  `;
+}
+
+// 会话卡片归属的分栏 key（与 renderBoardList 的分流逻辑保持一致）
+function sectionKeyOf(s) {
+  if (s.deleted) return 'deleted';
+  if (s.archived) return 'archived';
+  if (s.subagent) return 'subs';
+  if (!s.in_client_list) return 'outside';
+  return 'main';
+}
+
+function gotoSessionCard(sid) {
+  const s = boardData.find(x => x.session_id === sid);
+  if (!s) { openSession(sid); return; }   // 看板数据里没有（异常）→ 退回直接进详情
+  const key = sectionKeyOf(s);
+  if (key && boardSectionsOpen[key] === false) {
+    delete boardSectionsOpen[key];        // 被折叠就展开（回到默认展开态）再定位
+    saveBoardSections();
+  }
+  renderBoardList(boardData);
+  requestAnimationFrame(() => {
+    const el = document.getElementById('bsess-' + sid);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1800);
+  });
+}
+
+function gotoByHint(hint) {
+  const hit = boardData.find(s => s.session_id.includes(hint));
+  if (hit) gotoSessionCard(hit.session_id);
+}
+
+// 右下角回顶按钮：看板打开且右栏下滚超过一屏头部时出现（台账定位跳转后跳回来用）。
+// 滚动容器 = 右栏 .board-sessions（双栏布局后 boardArea 本身不再滚动）
+function updateTopBtn() {
+  const el = document.querySelector('.board-sessions');
+  const on = rightTab === 'board' && el && el.scrollTop > 240;
+  document.getElementById('btnTop').style.display = on ? '' : 'none';
+}
+function boardToTop() {
+  const el = document.querySelector('.board-sessions');
+  if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderBoardList(sessions, errMsg) {
   // 五栏分流：活跃主会话 / 列表外 / 子代理 / 已归档 / 已删除（壳侧 archived+deleted 软标记，各栏可折叠）
   const goneDel = sessions.filter(s => s.deleted);
   const goneArch = sessions.filter(s => s.archived && !s.deleted);
@@ -826,19 +951,40 @@ function renderBoardList(sessions) {
   const main = mainAll.filter(s => s.in_client_list);
   const subs = live.filter(s => s.subagent);
   const goneTxt = `${outside.length ? ` + ${outside.length} 列表外` : ''}${goneArch.length ? ` + ${goneArch.length} 已归档` : ''}${goneDel.length ? ` + ${goneDel.length} 已删除` : ''}`;
+  const stamp = boardLastOkMs ? new Date(boardLastOkMs).toTimeString().slice(0, 8) : '—';
+  const staleBanner = errMsg
+    ? `<div style="margin-bottom:8px;padding:8px 12px;border:1px solid var(--red);border-radius:6px;background:rgba(248,81,73,.08);color:var(--red);font-size:13px">⚠️ 刷新失败（${escapeHtml(errMsg).slice(0, 120)}）——以下为 <b>数据截至 ${stamp}</b> 的旧快照，服务器可能未响应</div>`
+    : '';
+  // 自动刷新（30s）会整体重建 DOM，两栏滚动容器随之新生、滚动位置归零——
+  // 重建前先记住、重建后原位还回，刷新对阅读中的视线零扰动
+  const prevLedger = document.querySelector('.board-ledger');
+  const prevSessions = document.querySelector('.board-sessions');
+  const keepLedger = prevLedger ? prevLedger.scrollTop : 0;
+  const keepSessions = prevSessions ? prevSessions.scrollTop : 0;
   document.getElementById('boardArea').innerHTML = `
+    ${staleBanner}
     <div class="btoolbar">
       <span style="font-weight:600">会话上下文总览（本机 ZCode · ${main.length} 主 + ${subs.length} 子代理${goneTxt}）</span>
       <label style="font-size:12px;color:var(--text-muted);cursor:pointer"><input type="checkbox" id="boardAuto" ${boardAutoOn ? 'checked' : ''} onchange="toggleBoardAuto()"> 自动刷新 30s</label>
       <button class="btn" onclick="loadBoard()">🔄 刷新</button>
-      <span style="font-size:11px;color:var(--text-muted)">积分 = 官方系数 × 时段乘数的本地估算，非权威账单；配额余量在服务端（v2 接入）</span>
+      <span style="font-size:11px;color:var(--text-muted)">数据截至 ${stamp} · 积分 = 官方系数 × 时段乘数的本地估算，非权威账单；配额余量在服务端（v2 接入）</span>
     </div>
-    ${sectionHtml('main', '活跃主会话', main) || '<div class="empty-state">无会话</div>'}
-    ${sectionHtml('outside', '列表外会话（引擎在、客户端列表不显示：划词侧聊等）', outside, false)}
-    ${sectionHtml('subs', '子代理会话', subs)}
-    ${sectionHtml('archived', '已归档（客户端列表已移除，本地副本与流水仍在）', goneArch)}
-    ${sectionHtml('deleted', '已删除（客户端列表已移除，本地副本与流水仍在）', goneDel)}
+    <div class="board-cols">
+      <div class="board-ledger">${ledgerSectionHtml()}</div>
+      <div class="board-sessions">
+        ${sectionHtml('main', '活跃主会话', main) || '<div class="empty-state">无会话</div>'}
+        ${sectionHtml('outside', '列表外会话（引擎在、客户端列表不显示：划词侧聊等）', outside, false)}
+        ${sectionHtml('subs', '子代理会话', subs)}
+        ${sectionHtml('archived', '已归档（客户端列表已移除，本地副本与流水仍在）', goneArch)}
+        ${sectionHtml('deleted', '已删除（客户端列表已移除，本地副本与流水仍在）', goneDel)}
+      </div>
+    </div>
   `;
+  const led = document.querySelector('.board-ledger');
+  const ses = document.querySelector('.board-sessions');
+  if (led) led.scrollTop = keepLedger;
+  if (ses) ses.scrollTop = keepSessions;
+  updateTopBtn();
 }
 
 function toggleBoardAuto() {
@@ -854,7 +1000,7 @@ async function openSession(id, keepScroll) {
   const scroll = keepScroll ? area.scrollTop : 0;
   if (!keepScroll) area.innerHTML = '<div class="empty-state">加载会话详情…</div>';
   try {
-    const res = await fetch('/api/ctx/sessions/' + id);
+    const res = await fetchTimeout('/api/ctx/sessions/' + id);
     if (!res.ok) throw new Error(await res.text());
     renderDetail(await res.json());
     if (keepScroll) area.scrollTop = scroll;
@@ -928,6 +1074,7 @@ function renderDetail(d) {
   }).join('');
 
   area.innerHTML = `
+    <div class="detail-scroll">
     <div class="btoolbar">
       <button class="btn" onclick="boardBack()">← 返回总览</button>
       <span style="font-weight:600">${escapeHtml(d.session_id)}</span>
@@ -944,7 +1091,9 @@ function renderDetail(d) {
       <tbody>${turns || '<tr><td colspan="9" style="color:var(--text-muted)">无轮次记录</td></tr>'}</tbody>
     </table>
     ${d.rollout_file ? `<div class="bsub" style="margin-top:8px">流水：${escapeHtml(d.rollout_file)}</div>` : ''}
+    </div>
   `;
+  updateTopBtn();   // 详情视图右栏滚动容器不存在，回顶按钮收回
 }
 
 refreshTools();
@@ -952,6 +1101,8 @@ loadLogs();
 connectLogStream();
 loadBoardSections();
 loadBoardAuto();
+// scroll 事件不冒泡：用捕获阶段在 boardArea 上接住两栏内部的滚动
+document.getElementById('boardArea').addEventListener('scroll', updateTopBtn, true);
 // 深链：/?board=1 直接进入看板（书签直达 / 自动化自检用）
 if (new URLSearchParams(location.search).has('board')) openBoard();
 </script>
