@@ -5,16 +5,17 @@
 ///    或注记编号（「**=整理主线 - 02**」）——编号命名与主线（cur）组以这里为准
 /// 2. 各组编号 MD（`NN-组名.md`）的「涉及会话」表：首列 `sess_…`（- NN）标记——
 ///    补 00 表标题未带编号的追认行（如 11-01，组 MD 首列有标记而标题是原始指令）
-/// 3. 00 头注挂账段：`` `短id` 名称。- NN（…，组NN）`` ——已编号还没进正表的会话，打等待登记标
-///    （另：00 正表行内带「自登记」字样的行 = 会话自写的行，打已自登记标；主线过手后
-///    把行内字样改「已收编」即熄标。p 拍板口径：收编只走整理主线一条线，两档都是
-///    「主线处理前」的状态展示
+/// 3. 00 头注挂账段：`` `短id` 名称。- NN（…，组NN）`` ——已编号还没进正表的会话，打未登记标
+///    （另：00 正表行内带「自登记」字样的行 = 会话自写的行，打自登记标；无字样的正表行
+///    = 主线已代登记/已过手，打已登记标。p 拍板口径：收编只走整理主线一条线；10-15 增拍
+///    第三档——只要会话还没存档就该有标在，三档都是「还开着」的提示；同日定名三字：
+///    未登记/自登记/已登记
 /// 4. 壳侧真名（最高优先）：引擎库 session.title = p 在壳侧编辑的名字——编号样式且
 ///    序号一致即采纳；未编辑的用完即弃会话是原始指令式标题，不覆盖台账命名
 /// 5. 壳侧已编号未入册：db 里标题是编号样式、但 MD 台账还没登记的会话（编号现场
 ///    可见，打 unregistered 标；MD 正式登记后自然转正）
 ///
-/// 两档标（已自登记/等待登记）只属于还开着的会话：壳侧已存档/删除 = 完结，一律熄标。
+/// 三档标（自登记/已登记/未登记）只属于还开着的会话：壳侧已存档/删除 = 完结，一律熄标。
 ///
 /// 条目命名优先级：壳侧真名（编号样式）> 台账记录名 > 组前缀构造（仅追认行）。
 /// 组内早期行的旧式命名（如「A股投资与量化。- 03」无「11-」前缀）原样保留，
@@ -52,10 +53,13 @@ pub struct LedgerItem {
     pub session_id: Option<String>,
     /// 短 id 线索（挂账行），前端按「包含匹配」兜底下钻
     pub id_hint: Option<String>,
-    /// 已自登记 = 行已由会话自写入 00 正表（行内带「自登记」字样），待主线过手；
-    /// 主线过手时把行内「自登记」改「已收编」，标即熄
+    /// 自登记 = 行已由会话自写入 00 正表（行内带「自登记」字样），待主线过手；
+    /// 主线过手清字后换亮已登记标
     pub self_registered: bool,
-    /// 等待登记 = 台账文件里还没有行（00 头注挂账段 / 仅壳侧改名两来源）
+    /// 已登记 = 行在 00 正表且无「自登记」字样（主线代登记或已过手），10-15 新增中间态：
+    /// 会话还开着就该有标，存档即熄
+    pub collected: bool,
+    /// 未登记 = 台账文件里还没有行（00 头注挂账段 / 仅壳侧改名两来源）
     pub unregistered: bool,
 }
 
@@ -66,6 +70,7 @@ struct RawItem {
     session_id: Option<String>,
     id_hint: Option<String>,
     self_registered: bool,
+    collected: bool,
     unregistered: bool,
 }
 
@@ -126,8 +131,8 @@ pub fn list_numbered() -> NumberedLedger {
         add_unregistered_from_db(&mut groups, &shell, &md_stems);
     }
 
-    // 存档熄标：p 在壳侧存档/删除 = 会话已完结，历史自登记行不再亮「已自登记」、
-    // 未登记的也不再亮「等待登记」——标只留给还开着的会话
+    // 存档熄标：p 在壳侧存档/删除 = 会话已完结，历史自登记行不再亮「自登记」、
+    // 未登记的也不再亮「未登记」——标只留给还开着的会话
     let finished = shell_finished_ids();
     if !finished.is_empty() {
         for acc in groups.values_mut() {
@@ -144,6 +149,7 @@ pub fn list_numbered() -> NumberedLedger {
                         .unwrap_or(false);
                 if done {
                     raw.self_registered = false;
+                    raw.collected = false;
                     raw.unregistered = false;
                 }
             }
@@ -176,6 +182,7 @@ pub fn list_numbered() -> NumberedLedger {
                 session_id: raw.session_id.clone(),
                 id_hint: raw.id_hint.clone(),
                 self_registered: raw.self_registered,
+                collected: raw.collected,
                 unregistered: raw.unregistered,
             })
             .collect::<Vec<_>>();
@@ -284,8 +291,9 @@ fn parse_ledger00(
                 format!("sess_{id}")
             }
         });
-        // 已自登记：非 cur 行看「自登记」字样（主线过手后改「已收编」即熄标）；
-        // cur 行（会话整理主线）一律算——主线只自写行、无他人代登记，存档即熄标
+        // 自登记：非 cur 行看「自登记」字样（主线过手清字后即换亮已登记标）；
+        // cur 行（会话整理主线）一律算——主线只自写行、无他人代登记，存档即熄标。
+        // 无「自登记」字样的正表行 = 主线代登记或已过手 → 已登记档（10-15 中间态）
         let self_reg =
             key == "cur" || (title.contains("自登记") && !title.contains("已收编"));
         let acc = groups.entry(key).or_insert_with(|| GroupAcc {
@@ -297,6 +305,8 @@ fn parse_ledger00(
         raw.name = Some(name);
         if self_reg {
             raw.self_registered = true;
+        } else {
+            raw.collected = true;
         }
         if raw.session_id.is_none() {
             raw.session_id = session_id;
@@ -447,6 +457,7 @@ fn add_unregistered_from_db(
                     session_id: Some(id.clone()),
                     id_hint: None,
                     self_registered: false,
+                    collected: false,
                     unregistered: true,
                 },
             );
@@ -642,7 +653,7 @@ mod tests {
         assert!(it.session_id.as_deref().unwrap().starts_with("sess_33333333"));
         let it14 = g05.items.get(&14).unwrap();
         assert!(it14.session_id.as_deref().unwrap().starts_with("sess_55555555"));
-        // 行内带「自登记」→ 已自登记档
+        // 行内带「自登记」→ 自登记档
         assert!(it14.self_registered);
     }
 
@@ -654,14 +665,34 @@ mod tests {
             g11.items.get(&7).unwrap().name.as_deref(),
             Some("11-A 股投资与量化。- 07")
         );
+        // 行内无「自登记」字样的正表行 = 主线代登记 → 已登记档（不亮自登记）
+        let it7 = g11.items.get(&7).unwrap();
+        assert!(it7.collected && !it7.self_registered);
         let cur = groups.get("cur").unwrap();
         assert_eq!(cur.label, "会话整理主线");
-        // cur 行（会话整理主线）一律已自登记：主线只自写行，存档才熄标
+        // cur 行（会话整理主线）一律自登记：主线只自写行，存档才熄标
         assert!(cur.items.get(&3).unwrap().self_registered);
+        assert!(!cur.items.get(&3).unwrap().collected);
         assert_eq!(
             cur.items.get(&3).unwrap().name.as_deref(),
             Some("整理会话总结并同步MD文件。- 03")
         );
+    }
+
+    #[test]
+    fn mainline_and_collected_wording_light_collected_only() {
+        // 主线代写的正态行 + 清字后的「已登记」字样行都只亮已登记档
+        let txt = "| 30 | `99999999-9999-4999-8999-999999999999` | 10-15 | 主会话 | 11-A 股投资与量化。- 12（主线补，正态未自登） | 11·A股投资与量化 | 在 |\n\
+                   | 31 | `aaaa0000-0000-4000-8000-000000000000` | 10-15 | 主会话 | 05-安卓运维。- 16（已登记：主线过手） | 05·安卓运维 | 在 |\n";
+        let mut groups = BTreeMap::new();
+        let mut stems = BTreeMap::new();
+        stems.insert("11".to_string(), "11-A股投资与量化".to_string());
+        stems.insert("05".to_string(), "05-安卓运维".to_string());
+        parse_ledger00(txt, &stems, &mut groups);
+        let it12 = groups.get("11").unwrap().items.get(&12).unwrap();
+        assert!(it12.collected && !it12.self_registered);
+        let it16 = groups.get("05").unwrap().items.get(&16).unwrap();
+        assert!(it16.collected && !it16.self_registered);
     }
 
     #[test]

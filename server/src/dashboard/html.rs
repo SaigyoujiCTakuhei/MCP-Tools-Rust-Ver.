@@ -174,6 +174,7 @@ pub fn dashboard_html() -> &'static str {
   /* 状态徽章内嵌在名字芯片里（不独立成 chip，避免换行时与名字散开） */
   .lflag { font-size: 10px; padding: 0 5px; margin-left: 5px; border-radius: 4px; vertical-align: 1px; }
   .lflag-self { background: rgba(210,153,34,.18); color: var(--yellow); }
+  .lflag-done { background: rgba(63,185,80,.15); color: var(--green); }
   .lflag-wait { background: rgba(139,148,158,.18); color: var(--text-muted); }
   .bcard.flash { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(88,166,255,.08); }
   #btnTop { position: fixed; right: 18px; bottom: 18px; z-index: 30; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
@@ -887,7 +888,11 @@ function ledgerSectionHtml() {
     const items = g.items.map(it => {
       const click = it.session_id ? `gotoSessionCard('${it.session_id}')`
         : it.id_hint ? `gotoByHint('${it.id_hint}')` : null;
-      const flag = it.self_registered ? ['已自登记', 'lflag-self'] : it.unregistered ? ['等待登记', 'lflag-wait'] : null;
+      // 三档标（还开着就有标，存档全熄；10-15 定名三字）：自登记=行是会话自写的（黄）→
+      // 已登记=主线已代登记/过手（绿，同日新增中间态）→ 未登记=台账里还没行（灰）
+      const flag = it.self_registered ? ['自登记', 'lflag-self']
+        : it.collected ? ['已登记', 'lflag-done']
+        : it.unregistered ? ['未登记', 'lflag-wait'] : null;
       const attrs = `${click ? ` onclick="${click}"` : ''}${it.session_id ? ` title="定位到列表中的会话卡片 · ${it.session_id}"` : ' title="定位到列表中的会话卡片"'}`;
       return `<span class="litem ${flag ? 'litem-pending' : ''}"${attrs}>${escapeHtml(it.name)}${flag ? `<span class="lflag ${flag[1]}">${flag[0]}</span>` : ''}</span>`;
     }).join('');
