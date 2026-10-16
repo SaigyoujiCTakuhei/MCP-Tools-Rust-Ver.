@@ -10,6 +10,7 @@
 ///    （ASUS 实证 447 请求 15 处骤降仅 2 处与压缩相关）
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -705,6 +706,70 @@ pub fn session_detail(session_id: &str) -> anyhow::Result<SessionDetail> {
         rollout_file: rollout_file
             .exists()
             .then(|| rollout_file.display().to_string()),
+    })
+}
+
+// ==================== 会话原文（rollout 流水逐行优雅打印） ====================
+
+/// GET /api/ctx/sessions/:id/raw 的数据腿：按行分段读流水原文，逐行 JSON 优雅打印。
+/// 设计约束（防 GB 级流水拖垮响应/页面）：行数帽+字节预算双封顶、不做全文件预扫描、
+/// EOF 由下一次空读判定；解析失败的行原样透传（保真优先于美化）。
+#[derive(Debug, Serialize)]
+pub struct RawChunk {
+    pub path: String,
+    pub file_size: u64,
+    pub offset: u64,
+    /// 优雅打印后的行块（每元素 = 原文件一行的 pretty JSON）
+    pub lines: Vec<String>,
+    /// 还有后续 = 下一批起始行号；本批已读到 EOF = None
+    pub next_offset: Option<u64>,
+}
+
+pub fn session_raw(session_id: &str, offset: u64, limit: u64) -> anyhow::Result<RawChunk> {
+    if !valid_session_id(session_id) {
+        return Err(anyhow!("非法 session_id"));
+    }
+    let limit = limit.clamp(1, 2000);
+    const BYTE_BUDGET: usize = 1024 * 1024;
+    let path = expand_home(&cfg().rollout_dir).join(format!("model-io-{session_id}.jsonl"));
+    let file_size = fs::metadata(&path)
+        .with_context(|| format!("流水文件不存在（已清理的会话）: {}", path.display()))?
+        .len();
+    let mut reader = BufReader::new(fs::File::open(&path)?);
+    let mut buf = String::new();
+    for _ in 0..offset {
+        buf.clear();
+        if reader.read_line(&mut buf)? == 0 {
+            break; // offset 越过 EOF
+        }
+    }
+    buf.clear();
+    let mut lines = Vec::new();
+    let mut served = 0usize;
+    let mut hit_cap = false;
+    loop {
+        if lines.len() as u64 >= limit || served >= BYTE_BUDGET {
+            hit_cap = true;
+            break;
+        }
+        buf.clear();
+        if reader.read_line(&mut buf)? == 0 {
+            break; // EOF
+        }
+        let raw = buf.trim_end_matches(['\n', '\r']);
+        let pretty = serde_json::from_str::<serde_json::Value>(raw)
+            .and_then(|v| serde_json::to_string_pretty(&v))
+            .unwrap_or_else(|_| raw.to_string());
+        served += pretty.len() + 2; // +2 = 前端行块间分隔
+        lines.push(pretty);
+    }
+    let next_offset = hit_cap.then(|| offset + lines.len() as u64);
+    Ok(RawChunk {
+        path: path.display().to_string(),
+        file_size,
+        offset,
+        lines,
+        next_offset,
     })
 }
 

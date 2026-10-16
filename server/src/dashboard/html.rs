@@ -156,7 +156,7 @@ pub fn dashboard_html() -> &'static str {
   }
   .board-sessions { flex: 1; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
   .ledger-head { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .detail-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .detail-scroll { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   @media (max-width: 1100px) {
     .board-cols { flex-direction: column; }
     .board-ledger { flex: none; max-height: 40vh; }
@@ -176,6 +176,7 @@ pub fn dashboard_html() -> &'static str {
   .lflag-self { background: rgba(210,153,34,.18); color: var(--yellow); }
   .lflag-done { background: rgba(63,185,80,.15); color: var(--green); }
   .lflag-wait { background: rgba(139,148,158,.18); color: var(--text-muted); }
+  .raw-box { max-height: 480px; overflow: auto; margin-right: 12px; background: rgba(13,17,23,.65); border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; user-select: text; }
   .bcard.flash { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: rgba(88,166,255,.08); }
   #btnTop { position: fixed; right: 18px; bottom: 18px; z-index: 30; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
 </style>
@@ -744,7 +745,10 @@ function zoneColor(ctx) {
 function openBoard() { switchRight('board'); }
 
 async function loadBoard() {
-  if (boardDetailId) { await openSession(boardDetailId, true); return; }
+  // 详情视图不自动重渲染：30s 定时刷新会重建整个详情 DOM 并重拉原文首块，
+  // 阅读位置全丢（10-16 p 反馈「30 秒的刷新会把页面重置」）——详情数据用卡片上
+  // 的 🔄 手动刷新；返回总览（boardBack）时本来就会立即 loadBoard
+  if (boardDetailId) return;
   const area = document.getElementById('boardArea');
   try {
     const res = await fetchTimeout('/api/ctx/sessions');
@@ -1022,6 +1026,41 @@ async function openSession(id, keepScroll) {
 
 function boardBack() { boardDetailId = null; loadBoard(); }
 
+// 会话原文（rollout 逐行优雅打印）分段加载：首块随详情自动拉，其余按「加载更多」续读；
+// EOF 由服务端空读判定（next_offset=null 即到尾），失败不丢已加载内容；
+// 24MB 安全阀：本机 Firefox 跑在 Pi 上，阻止把数百 MB 文本灌进 DOM（OOM 风险），完整原文看服务器文件
+let rawState = null;
+async function loadRawMore() {
+  const box = document.getElementById('rawBox');
+  if (!rawState || !box || rawState.busy || rawState.next === null) return;
+  rawState.busy = true;
+  try {
+    const res = await fetchTimeout(`/api/ctx/sessions/${rawState.id}/raw?offset=${rawState.next}`);
+    if (!res.ok) throw new Error(await res.text());
+    const c = await res.json();
+    const eof = c.next_offset === null;
+    if (c.lines.length) {
+      if (!rawState.loaded) box.textContent = '';   // 首块到达，撤「加载中…」占位
+      const chunk = c.lines.map(l => escapeHtml(l)).join('\n');
+      box.insertAdjacentHTML('beforeend', (rawState.loaded ? '\n\n' : '') + chunk);
+      rawState.loaded += c.lines.length;
+      rawState.bytes = (rawState.bytes || 0) + chunk.length;
+    }
+    rawState.next = eof || (rawState.bytes || 0) >= 24 * 1024 * 1024 ? null : c.next_offset;
+    let stat = `已加载 ${rawState.loaded} 行 · 原始文件 ${(c.file_size / 1048576).toFixed(1)} MB`;
+    if (!eof && rawState.next === null) stat += ' · 已达浏览器安全加载上限（24 MB），完整原文请看上方「流水」路径的服务器文件';
+    document.getElementById('rawStat').textContent = stat;
+    document.getElementById('rawMoreBtn').style.display = rawState.next === null ? 'none' : '';
+    if (eof) box.insertAdjacentHTML('beforeend', '\n\n────── 已到文件末尾 ──────');
+  } catch (e) {
+    const msg = `原文加载失败: ${escapeHtml(e.message)}`;
+    if (rawState.loaded) box.insertAdjacentHTML('beforeend', `\n\n<span style="color:var(--red)">${msg}</span>`);
+    else box.innerHTML = `<span style="color:var(--red)">${msg}</span>`;
+    document.getElementById('rawMoreBtn').style.display = 'none';
+  }
+  rawState.busy = false;
+}
+
 function renderDetail(d) {
   const area = document.getElementById('boardArea');
   const win = d.context_window || 1000000;
@@ -1084,6 +1123,7 @@ function renderDetail(d) {
     </tr>`;
   }).join('');
 
+  const asOf = new Date().toTimeString().slice(0, 8);
   area.innerHTML = `
     <div class="detail-scroll">
     <div class="btoolbar">
@@ -1093,6 +1133,7 @@ function renderDetail(d) {
       ${compactChip}
       <span style="font-size:11px;color:var(--text-muted)">压缩事件（part 表权威口径，唯一 boundaryId 计数）：${compactN} 次</span>
       <button class="btn" onclick="openSession('${d.session_id}')">🔄 刷新</button>
+      <span style="font-size:11px;color:var(--text-muted)">自动刷新已暂停 · 数据截至 ${asOf} · 返回总览恢复</span>
     </div>
     <div style="font-weight:600;margin-bottom:2px">上下文增长曲线（每请求的完整上下文，含缓存命中；绿线 = 主会话，灰点 = 子代理；骤降≠压缩——旧大工具结果会被引擎逐出上下文，红竖线才是真实压缩边界）</div>
     ${curveSvg}
@@ -1102,8 +1143,18 @@ function renderDetail(d) {
       <tbody>${turns || '<tr><td colspan="9" style="color:var(--text-muted)">无轮次记录</td></tr>'}</tbody>
     </table>
     ${d.rollout_file ? `<div class="bsub" style="margin-top:8px">流水：${escapeHtml(d.rollout_file)}</div>` : ''}
+    <div style="font-weight:600;margin:10px 0 4px">会话原文（rollout 流水逐行优雅打印；大文件分段加载，点「加载更多」续读）</div>
+    ${d.rollout_file
+      ? `<div id="rawBox" class="raw-box"><span style="color:var(--text-muted)">加载中…</span></div>
+         <div style="display:flex;gap:10px;align-items:center;margin:4px 0 10px">
+           <span id="rawStat" style="font-size:11px;color:var(--text-muted)"></span>
+           <button id="rawMoreBtn" class="btn" style="display:none" onclick="loadRawMore()">加载更多</button>
+         </div>`
+      : '<div class="bsub" style="margin:4px 0 10px">原文不可用：流水文件不存在（已清理的会话）</div>'}
     </div>
   `;
+  rawState = d.rollout_file ? { id: d.session_id, next: 0, loaded: 0, busy: false } : null;
+  if (rawState) loadRawMore();
   updateTopBtn();   // 详情视图右栏滚动容器不存在，回顶按钮收回
 }
 

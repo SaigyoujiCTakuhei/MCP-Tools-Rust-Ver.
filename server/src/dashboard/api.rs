@@ -1,6 +1,6 @@
 /// Dashboard REST API — 工具管理 + 日志查询 + 实时日志 SSE
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -240,6 +240,35 @@ pub async fn api_ctx_session_detail(Path(id): Path<String>) -> Response {
     }
 }
 
+/// GET /api/ctx/sessions/:id/raw?offset=0&limit=400 — 会话流水原文分段，
+/// 逐行 JSON 优雅打印（行数帽+字节预算封顶；文件不存在=404，前端展示原因）
+#[derive(serde::Deserialize)]
+struct CtxRawQuery {
+    offset: Option<u64>,
+    limit: Option<u64>,
+}
+
+pub async fn api_ctx_session_raw(
+    Path(id): Path<String>,
+    Query(q): Query<CtxRawQuery>,
+) -> Response {
+    let offset = q.offset.unwrap_or(0);
+    let limit = q.limit.unwrap_or(400);
+    match tokio::task::spawn_blocking(move || {
+        crate::ctxboard::query::session_raw(&id, offset, limit)
+    })
+    .await
+    {
+        Ok(Ok(chunk)) => Json(chunk).into_response(),
+        Ok(Err(e)) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("原文读取任务失败: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/ctx/numbered — 编号会话台账（解析「会话整理」文件夹；台账自身故障降级为
 /// warnings 非空 + 空列表，不 500，避免拖垮整个看板）
 pub async fn api_ctx_numbered() -> Response {
@@ -274,6 +303,7 @@ pub fn build_dashboard_router(state: AppState) -> Router {
         .route("/api/logs/stream", get(api_logs_stream))
         .route("/api/ctx/sessions", get(api_ctx_sessions))
         .route("/api/ctx/sessions/:id", get(api_ctx_session_detail))
+        .route("/api/ctx/sessions/:id/raw", get(api_ctx_session_raw))
         .route("/api/ctx/numbered", get(api_ctx_numbered))
         .with_state(state)
 }
