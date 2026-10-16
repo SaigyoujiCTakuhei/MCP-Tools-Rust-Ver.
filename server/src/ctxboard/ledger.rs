@@ -7,9 +7,10 @@
 ///    补 00 表标题未带编号的追认行（如 11-01，组 MD 首列有标记而标题是原始指令）
 /// 3. 00 头注挂账段：`` `短id` 名称。- NN（…，组NN）`` ——已编号还没进正表的会话，打未登记标
 ///    （另：00 正表行内带「自登记」字样的行 = 会话自写的行，打自登记标；无字样的正表行
-///    = 主线已代登记/已过手，打已登记标。p 拍板口径：收编只走整理主线一条线；10-15 增拍
-///    第三档——只要会话还没存档就该有标在，三档都是「还开着」的提示；同日定名三字：
-///    未登记/自登记/已登记
+///    = 主线已代登记/已过手，打已登记标，cur 主线行恒归此档。p 拍板口径：收编只走整理
+///    主线一条线；10-15 增拍第三档——只要会话还没存档就该有标在，三档都是「还开着」的
+///    提示；同日定名三字：未登记/自登记/已登记；10-16 换字规矩入主线提示词、
+///    cur 恒自登记随三档语义作废
 /// 4. 壳侧真名（最高优先）：引擎库 session.title = p 在壳侧编辑的名字——编号样式且
 ///    序号一致即采纳；未编辑的用完即弃会话是原始指令式标题，不覆盖台账命名
 /// 5. 壳侧已编号未入册：db 里标题是编号样式、但 MD 台账还没登记的会话（编号现场
@@ -291,11 +292,11 @@ fn parse_ledger00(
                 format!("sess_{id}")
             }
         });
-        // 自登记：非 cur 行看「自登记」字样（主线过手清字后即换亮已登记标）；
-        // cur 行（会话整理主线）一律算——主线只自写行、无他人代登记，存档即熄标。
-        // 无「自登记」字样的正表行 = 主线代登记或已过手 → 已登记档（10-15 中间态）
-        let self_reg =
-            key == "cur" || (title.contains("自登记") && !title.contains("已收编"));
+        // 自登记：非 cur 行看「自登记」字样（主线过手清字后即换亮已登记标）。
+        // cur 行（会话整理主线）恒归已登记档——主线行=「主线已登记」的定义本身，
+        // 10-14 两档时代的「cur 恒自登记」随三档语义作废（10-16 p 期望主线行翻绿拍板）；
+        // 存档即熄标不变。
+        let self_reg = key != "cur" && title.contains("自登记") && !title.contains("已收编");
         let acc = groups.entry(key).or_insert_with(|| GroupAcc {
             label,
             items: BTreeMap::new(),
@@ -670,9 +671,9 @@ mod tests {
         assert!(it7.collected && !it7.self_registered);
         let cur = groups.get("cur").unwrap();
         assert_eq!(cur.label, "会话整理主线");
-        // cur 行（会话整理主线）一律自登记：主线只自写行，存档才熄标
-        assert!(cur.items.get(&3).unwrap().self_registered);
-        assert!(!cur.items.get(&3).unwrap().collected);
+        // cur 行（会话整理主线）恒已登记：主线行=「主线已登记」的定义本身，存档才熄标
+        let it3 = cur.items.get(&3).unwrap();
+        assert!(it3.collected && !it3.self_registered);
         assert_eq!(
             cur.items.get(&3).unwrap().name.as_deref(),
             Some("整理会话总结并同步MD文件。- 03")
